@@ -1,0 +1,28 @@
+# Local/production-like stack. Secrets come from backend/.env (never baked into images).
+#   docker compose up --build
+# Frontend: http://localhost:8080   Backend: http://localhost:8000
+services:
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

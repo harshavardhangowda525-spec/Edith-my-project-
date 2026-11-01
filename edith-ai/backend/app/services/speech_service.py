@@ -33,13 +33,14 @@ class OpenAISpeechProvider:
     name = "openai"
 
     def __init__(self, s: Settings) -> None:
+        self.name = s.speech_kind
         key = s.speech_api_key or s.ai_api_key
         if not key:
             raise ConfigurationError("SPEECH_API_KEY is not set on the server")
         self.s, self.key = s, key
 
     async def _post(self, path: str, **kw: object) -> httpx.Response:
-        url = self.s.speech_base_url.rstrip("/") + path
+        url = self.s.speech_base + path
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(self.s.ai_timeout_seconds, connect=10)) as c:
                 r = await c.post(url, headers={"Authorization": f"Bearer {self.key}"}, **kw)  # type: ignore[arg-type]
@@ -53,7 +54,7 @@ class OpenAISpeechProvider:
 
     async def transcribe(self, audio: bytes, filename: str, content_type: str,
                          language: str | None) -> str:
-        data = {"model": self.s.stt_model}
+        data = {"model": self.s.stt_model_name}
         if language:
             data["language"] = language.split("-")[0]
         r = await self._post("/audio/transcriptions", data=data,
@@ -64,6 +65,10 @@ class OpenAISpeechProvider:
             raise ProviderError("Speech provider returned an unexpected response") from exc
 
     async def speak(self, text: str, voice: str | None) -> tuple[bytes, str]:
+        if self.s.speech_kind != "openai":
+            raise ConfigurationError(f"Server text-to-speech is not available with {self.s.speech_kind}; "
+                                     "the app speaks answers with the device voice.",
+                                     code="speech_not_configured")
         r = await self._post("/audio/speech", json={
             "model": self.s.tts_model, "voice": voice or self.s.tts_voice,
             "input": text, "response_format": "mp3",
@@ -79,7 +84,7 @@ class SpeechService:
     @property
     def provider(self) -> SpeechProvider:
         if self._provider is None:
-            if self.settings.speech_provider == "none":
+            if self.settings.speech_kind == "none":
                 raise ConfigurationError(
                     "Server-side speech is not configured. The app uses your browser's built-in "
                     "speech recognition and synthesis instead.", code="speech_not_configured")

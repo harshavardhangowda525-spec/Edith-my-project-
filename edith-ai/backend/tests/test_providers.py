@@ -94,3 +94,33 @@ def test_env_var_value_groq_is_accepted(monkeypatch) -> None:
     monkeypatch.setenv("AI_BASE_URL", "")
     s = Settings(_env_file=None)
     assert s.ai_provider == "groq" and s.ai_base_url.startswith("https://api.groq.com")
+
+
+def test_speech_auto_uses_groq_whisper() -> None:
+    s = make_settings(ai_provider="groq", ai_api_key="gsk_x")
+    assert s.speech_kind == "groq"
+    assert s.speech_base == "https://api.groq.com/openai/v1"
+    assert s.stt_model_name == "whisper-large-v3-turbo"
+    assert make_settings(ai_provider="mock").speech_kind == "none"
+    assert make_settings(ai_provider="anthropic", ai_api_key="k").speech_kind == "none"
+    assert make_settings(ai_provider="groq", ai_api_key="k", speech_provider="none").speech_kind == "none"
+
+
+@respx.mock
+def test_transcribe_with_groq() -> None:
+    route = respx.post("https://api.groq.com/openai/v1/audio/transcriptions").mock(
+        return_value=httpx.Response(200, json={"text": " What is the weather? "}))
+    c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_x")))
+    assert c.get("/health").json()["speech_provider"] == "groq"
+    wav = b"RIFF" + b"\0" * 2000
+    r = c.post("/api/voice/transcribe", headers=auth(), files={"audio": ("q.wav", wav, "audio/wav")})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"text": "What is the weather?", "provider": "groq"}
+    assert b"whisper-large-v3-turbo" in route.calls[0].request.content
+    assert route.calls[0].request.headers["Authorization"] == "Bearer gsk_x"
+
+
+def test_groq_speak_explains_device_voice() -> None:
+    c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_x")))
+    r = c.post("/api/voice/speak", headers=auth(), json={"text": "hi"})
+    assert r.status_code == 503 and "device voice" in r.json()["error"]["message"]

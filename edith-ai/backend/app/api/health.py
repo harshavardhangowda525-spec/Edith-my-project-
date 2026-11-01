@@ -17,7 +17,7 @@ def health(settings: Settings = Depends(get_settings_dep)) -> HealthResponse:
         ai_provider=settings.ai_provider,
         ai_configured=settings.ai_configured,
         mock_mode=settings.is_mock,
-        speech_provider=settings.speech_provider,
+        speech_provider=settings.speech_kind,
         storage_backend=settings.storage_backend,
         auth_mode=settings.auth_mode,
     )

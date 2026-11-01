@@ -39,6 +39,11 @@ def _host(url: str) -> str:
 
 ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
+# Server speech-to-text services (OpenAI-compatible /audio/transcriptions): (base_url, stt_model)
+SPEECH_PRESETS: dict[str, tuple[str, str]] = {
+    "openai": (OPENAI_DEFAULT_URL, "whisper-1"),
+    "groq": ("https://api.groq.com/openai/v1", "whisper-large-v3-turbo"),
+}
 SUPPORTED_AI_PROVIDERS = ["openai", "anthropic", "mock", *OPENAI_COMPATIBLE_PRESETS]
 
 
@@ -67,10 +72,12 @@ class Settings(BaseSettings):
     ai_temperature: float = 0.4
 
     # --- Server-side speech (optional; browser speech is the V1 default) ----
-    speech_provider: Literal["openai", "none"] = "none"
+    # "auto"   -> use the AI provider's speech-to-text when it has one (groq, openai)
+    # "groq" | "openai" | "none"
+    speech_provider: str = "auto"
     speech_api_key: str | None = None
-    speech_base_url: str = "https://api.openai.com/v1"
-    stt_model: str = "whisper-1"
+    speech_base_url: str = ""
+    stt_model: str = ""
     tts_model: str = "tts-1"
     tts_voice: str = "alloy"
     max_audio_bytes: int = 10 * 1024 * 1024
@@ -155,6 +162,25 @@ class Settings(BaseSettings):
         self.ai_base_url = base or OPENAI_DEFAULT_URL
         self.ai_model = model or OPENAI_DEFAULT_MODEL
         return self
+
+    @property
+    def speech_kind(self) -> str:
+        """Resolved server speech provider: 'openai', 'groq' or 'none'."""
+        sp = (self.speech_provider or "auto").strip().lower()
+        if sp == "auto":
+            if self.ai_provider in SPEECH_PRESETS and (self.speech_api_key or self.ai_api_key):
+                return self.ai_provider
+            return "none"
+        return sp if sp in SPEECH_PRESETS else "none"
+
+    @property
+    def speech_base(self) -> str:
+        return (self.speech_base_url.strip().rstrip("/")
+                or SPEECH_PRESETS.get(self.speech_kind, (OPENAI_DEFAULT_URL, ""))[0])
+
+    @property
+    def stt_model_name(self) -> str:
+        return self.stt_model.strip() or SPEECH_PRESETS.get(self.speech_kind, ("", "whisper-1"))[1]
 
     @property
     def ai_provider_kind(self) -> str | None:

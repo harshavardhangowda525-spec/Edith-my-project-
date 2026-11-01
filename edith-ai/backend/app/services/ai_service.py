@@ -8,6 +8,7 @@ provider lets the whole stack run offline and is always labeled as such.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -55,17 +56,53 @@ class Provider(Protocol):
     async def complete(self, system: str, messages: list[dict[str, str]], model: str) -> Completion: ...
 
 
-def _raise_for_status(r: httpx.Response, provider: str) -> None:
+_SECRETISH = re.compile(r"\b(?:sk|gsk|sb_secret|AIza|key)[-_][-_A-Za-z0-9]{2,}", re.I)
+
+
+def _upstream_message(r: httpx.Response) -> str:
+    """The provider's own short error text (e.g. 'model x does not exist'), with key-like strings removed."""
+    try:
+        body = r.json()
+    except ValueError:
+        return ""
+    err = body.get("error") if isinstance(body, dict) else None
+    msg = err.get("message") if isinstance(err, dict) else (err if isinstance(err, str) else "")
+    if not msg and isinstance(body, dict):
+        msg = body.get("message", "")
+    return _SECRETISH.sub("[hidden]", str(msg or ""))[:200]
+
+
+def _is_model_missing(r: httpx.Response) -> bool:
+    if r.status_code not in (400, 404):
+        return False
+    text = r.text.lower()
+    return any(k in text for k in ("model_not_found", "model_decommissioned", "does not exist",
+                                   "decommissioned", "unknown model", "invalid model"))
+
+
+def _raise_for_status(r: httpx.Response, provider: str, *, model: str = "", url: str = "") -> None:
     if r.status_code < 400:
         return
-    # Never echo upstream bodies verbatim: they can include request metadata.
+    said = _upstream_message(r)
+    suffix = f" [{provider} says: {said}]" if said else ""
     if r.status_code in (401, 403):
-        raise ProviderError(f"{provider} rejected the API key (HTTP {r.status_code})", code="provider_auth")
+        raise ProviderError(f"{provider} rejected the API key (HTTP {r.status_code}). Check AI_API_KEY."
+                            + suffix, code="provider_auth")
     if r.status_code == 429:
-        raise ProviderError(f"{provider} rate limit or quota exceeded", code="provider_rate_limited")
-    if r.status_code == 404:
-        raise ProviderError(f"{provider} endpoint or model not found", code="provider_not_found")
-    raise ProviderError(f"{provider} returned HTTP {r.status_code}")
+        raise ProviderError(f"{provider} rate limit or quota exceeded" + suffix, code="provider_rate_limited")
+    if r.status_code == 404 or _is_model_missing(r):
+        host = httpx.URL(url).host if url else ""
+        raise ProviderError(
+            f"{provider} could not find model '{model}' at {host}. Clear AI_MODEL to use the default, "
+            f"or set it to a model ID listed by your provider." + suffix, code="provider_not_found")
+    raise ProviderError(f"{provider} returned HTTP {r.status_code}" + suffix)
+
+
+# Used when the configured model is gone: first match from the provider's /models list.
+PREFERRED_MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "gpt-4o-mini",
+                    "llama-3.1-8b-instant", "openai/gpt-oss-20b"]
+_NOT_CHAT = re.compile(r"whisper|tts|orpheus|guard|safeguard|embed|playai|distil|moderation|image|audio",
+                       re.I)
 
 
 class OpenAICompatibleProvider:
@@ -77,24 +114,47 @@ class OpenAICompatibleProvider:
         self.s = settings
         self.client = client
         self.name = settings.ai_provider  # e.g. "groq" - shown in the UI status
+        self._replacement_model: str | None = None  # set when the configured model is unavailable
+
+    async def _available_model(self, c: httpx.AsyncClient, headers: dict[str, str]) -> str | None:
+        try:
+            r = await c.get(self.s.ai_base_url.rstrip("/") + "/models", headers=headers)
+            ids = [m["id"] for m in r.json().get("data", []) if isinstance(m, dict) and m.get("id")]
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+            return None
+        for wanted in PREFERRED_MODELS:
+            if wanted in ids:
+                return wanted
+        return next((i for i in sorted(ids) if not _NOT_CHAT.search(i)), None)
 
     async def complete(self, system: str, messages: list[dict[str, str]], model: str) -> Completion:
-        payload = {
-            "model": model,
-            "messages": [{"role": "system", "content": system}, *messages],
-            "max_tokens": self.s.ai_max_output_tokens,
-            "temperature": self.s.ai_temperature,
-        }
+        if model == self.s.ai_model and self._replacement_model:
+            model = self._replacement_model
         headers = {"Authorization": f"Bearer {self.s.ai_api_key}"} if self.s.ai_api_key else {}
         url = self.s.ai_base_url.rstrip("/") + "/chat/completions"
+
+        def payload(m: str) -> dict:
+            return {"model": m, "messages": [{"role": "system", "content": system}, *messages],
+                    "max_tokens": self.s.ai_max_output_tokens, "temperature": self.s.ai_temperature}
+
         try:
             async with _client(self.client, self.s.ai_timeout_seconds) as c:
-                r = await c.post(url, json=payload, headers=headers)
+                r = await c.post(url, json=payload(model), headers=headers)
+                if _is_model_missing(r) or r.status_code == 404:
+                    # The model was renamed/retired (or mistyped): switch to one the provider offers.
+                    alt = await self._available_model(c, headers)
+                    if alt and alt != model:
+                        log.warning("AI model '%s' unavailable at %s; using '%s' instead. "
+                                    "Set AI_MODEL to choose a model.", model, self.name, alt)
+                        r = await c.post(url, json=payload(alt), headers=headers)
+                        if r.status_code < 400:
+                            self._replacement_model = alt
+                            model = alt
         except httpx.TimeoutException as exc:
             raise ProviderTimeout("The AI provider timed out") from exc
         except httpx.HTTPError as exc:
             raise ProviderError("Could not reach the AI provider") from exc
-        _raise_for_status(r, "AI provider")
+        _raise_for_status(r, self.name.capitalize(), model=model, url=url)
         try:
             data = r.json()
             text = data["choices"][0]["message"]["content"] or ""
@@ -126,7 +186,7 @@ class AnthropicProvider:
             raise ProviderTimeout("The AI provider timed out") from exc
         except httpx.HTTPError as exc:
             raise ProviderError("Could not reach the AI provider") from exc
-        _raise_for_status(r, "Anthropic")
+        _raise_for_status(r, "Anthropic", model=model, url=url)
         try:
             data = r.json()
             text = "".join(b.get("text", "") for b in data["content"] if b.get("type") == "text")

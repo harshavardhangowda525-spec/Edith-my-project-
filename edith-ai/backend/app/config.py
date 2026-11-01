@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
+from urllib.parse import urlsplit
 from typing import Literal
 
 from pydantic import field_validator, model_validator
@@ -31,6 +32,10 @@ OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str, bool]] = {
 }
 _UUID_RE = re.compile(r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}")
 _PASTE_JUNK = " \t\r\n\"'`<>"
+
+def _host(url: str) -> str:
+    return urlsplit(url if "://" in url else "https://" + url).hostname or ""
+
 
 ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -140,6 +145,13 @@ class Settings(BaseSettings):
         elif self.ai_provider == "anthropic":
             base = base or ANTHROPIC_DEFAULT_URL
             model = model or ANTHROPIC_DEFAULT_MODEL
+        # People often paste the full endpoint; keep only the API base.
+        base = base.rstrip("/")
+        for tail in ("/chat/completions", "/completions", "/messages", "/models"):
+            if base.endswith(tail):
+                base = base[: -len(tail)].rstrip("/")
+        if preset and base and _host(base) == _host(preset[0]):
+            base = preset[0]  # e.g. https://api.groq.com -> https://api.groq.com/openai/v1
         self.ai_base_url = base or OPENAI_DEFAULT_URL
         self.ai_model = model or OPENAI_DEFAULT_MODEL
         return self

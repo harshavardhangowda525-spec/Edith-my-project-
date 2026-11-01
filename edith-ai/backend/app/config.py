@@ -8,8 +8,29 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+OPENAI_DEFAULT_URL = "https://api.openai.com/v1"
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+
+# Named OpenAI-compatible services: AI_PROVIDER=<name> fills in the address and a
+# starting model. AI_BASE_URL / AI_MODEL still override them when set.
+# (base_url, default_model, needs_api_key)
+OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str, bool]] = {
+    "groq": ("https://api.groq.com/openai/v1", "llama-3.3-70b-versatile", True),
+    "openrouter": ("https://openrouter.ai/api/v1", "openai/gpt-4o-mini", True),
+    "together": ("https://api.together.xyz/v1", "meta-llama/Llama-3.3-70B-Instruct-Turbo", True),
+    "deepseek": ("https://api.deepseek.com/v1", "deepseek-chat", True),
+    "mistral": ("https://api.mistral.ai/v1", "mistral-small-latest", True),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash", True),
+    "ollama": ("http://localhost:11434/v1", "llama3.1", False),
+    "lmstudio": ("http://localhost:1234/v1", "local-model", False),
+}
+ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com/v1"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
+SUPPORTED_AI_PROVIDERS = ["openai", "anthropic", "mock", *OPENAI_COMPATIBLE_PRESETS]
 
 
 class Settings(BaseSettings):
@@ -24,10 +45,13 @@ class Settings(BaseSettings):
     # "openai"    -> any OpenAI-compatible /chat/completions endpoint
     # "anthropic" -> Anthropic Messages API (dedicated adapter)
     # "mock"      -> deterministic offline responses, clearly labeled
-    ai_provider: Literal["openai", "anthropic", "mock"] = "mock"
+    # "groq", "openrouter", "together", "deepseek", "mistral", "gemini", "ollama",
+    # "lmstudio" -> OpenAI-compatible services with their address pre-filled
+    # Anything else is reported as a configuration problem (the app still starts).
+    ai_provider: str = "mock"
     ai_api_key: str | None = None
-    ai_base_url: str = "https://api.openai.com/v1"
-    ai_model: str = "gpt-4o-mini"
+    ai_base_url: str = ""
+    ai_model: str = ""
     ai_allowed_models: str = ""  # comma-separated whitelist users may pick from
     ai_timeout_seconds: float = 30.0
     ai_max_output_tokens: int = 600
@@ -71,6 +95,52 @@ class Settings(BaseSettings):
     # When set and the folder exists, the built React app is served from "/".
     static_dir: str | None = None
 
+    @field_validator("ai_provider")
+    @classmethod
+    def _norm_provider(cls, v: str) -> str:
+        return (v or "mock").strip().lower().replace("-", "").replace(" ", "") or "mock"
+
+    @model_validator(mode="after")
+    def _fill_provider_defaults(self) -> "Settings":
+        self.ai_api_key = (self.ai_api_key or "").strip() or None
+        base, model = self.ai_base_url.strip(), self.ai_model.strip()
+        preset = OPENAI_COMPATIBLE_PRESETS.get(self.ai_provider)
+        if preset:
+            # Ignore a leftover OpenAI address/model: it can't work with another service.
+            if not base or base.rstrip("/") == OPENAI_DEFAULT_URL:
+                base = preset[0]
+            if not model or model == OPENAI_DEFAULT_MODEL:
+                model = preset[1]
+        elif self.ai_provider == "anthropic":
+            base = base or ANTHROPIC_DEFAULT_URL
+            model = model or ANTHROPIC_DEFAULT_MODEL
+        self.ai_base_url = base or OPENAI_DEFAULT_URL
+        self.ai_model = model or OPENAI_DEFAULT_MODEL
+        return self
+
+    @property
+    def ai_provider_kind(self) -> str | None:
+        """Which adapter to use: 'openai', 'anthropic', 'mock', or None if unknown."""
+        if self.ai_provider in ("openai", "anthropic", "mock"):
+            return self.ai_provider
+        if self.ai_provider in OPENAI_COMPATIBLE_PRESETS:
+            return "openai"
+        return None
+
+    @property
+    def ai_key_required(self) -> bool:
+        preset = OPENAI_COMPATIBLE_PRESETS.get(self.ai_provider)
+        return preset[2] if preset else self.ai_provider_kind != "mock"
+
+    @property
+    def ai_provider_problem(self) -> str | None:
+        if self.ai_provider_kind is None:
+            return (f"AI_PROVIDER '{self.ai_provider}' is not supported. Use one of: "
+                    + ", ".join(SUPPORTED_AI_PROVIDERS))
+        if self.ai_key_required and not self.ai_api_key:
+            return "AI_API_KEY is not set on the server. Set it in backend/.env or use AI_PROVIDER=mock."
+        return None
+
     @field_validator("log_level")
     @classmethod
     def _upper(cls, v: str) -> str:
@@ -99,11 +169,11 @@ class Settings(BaseSettings):
 
     @property
     def ai_configured(self) -> bool:
-        return self.ai_provider == "mock" or bool(self.ai_api_key)
+        return self.ai_provider_problem is None
 
     @property
     def is_mock(self) -> bool:
-        return self.ai_provider == "mock"
+        return self.ai_provider_kind == "mock"
 
 
 @lru_cache

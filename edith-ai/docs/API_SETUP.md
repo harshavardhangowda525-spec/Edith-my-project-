@@ -16,7 +16,18 @@ AI_MODEL=gpt-4o-mini
 AI_ALLOWED_MODELS=gpt-4o-mini,gpt-4o
 ```
 
-Other compatible services — only change `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`:
+**Shortcut:** these names fill in the address and a default model for you. Just set the
+provider and key (`AI_MODEL` / `AI_BASE_URL` still override them):
+
+```env
+AI_PROVIDER=groq           # or openrouter, together, deepseek, mistral, gemini, ollama, lmstudio
+AI_API_KEY=<your key>      # not needed for ollama / lmstudio
+```
+
+An unknown `AI_PROVIDER` doesn't stop the server. `/health` shows `ai_configured: false` and chat
+explains which values are supported.
+
+Or use `AI_PROVIDER=openai` with any compatible service by setting `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`:
 
 | Service | `AI_BASE_URL` |
 |---|---|

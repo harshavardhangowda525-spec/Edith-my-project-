@@ -133,6 +133,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.retrieval = RetrievalService(store)
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_minute)
 
+    if settings.ai_provider_problem:
+        log.error("AI provider misconfigured: %s", settings.ai_provider_problem)
     if settings.is_mock:
         log.warning("AI_PROVIDER=mock - responses are canned and NOT from a real AI model")
     if settings.auth_mode == "personal" and (problem := personal_mode_problem(settings)):

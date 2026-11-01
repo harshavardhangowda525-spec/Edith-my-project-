@@ -17,6 +17,7 @@ Phone + headphones ──internet──► Render (EDITH app + backend) ──�
 ## Before you start
 
 * An **AI API key**, for example:
+  * Groq (free tier available): <https://console.groq.com/keys>, or
   * OpenAI: <https://platform.openai.com/api-keys> (you need billing credit), or
   * Anthropic: <https://console.anthropic.com/> → API Keys.
 * Your GitHub login (the account that owns `Edith-my-project-`).
@@ -63,16 +64,18 @@ Write the three values down somewhere safe for the next part.
 
    | Setting | What to enter |
    |---|---|
-   | `AI_PROVIDER` | `openai` (OpenAI key) or `anthropic` (Anthropic key) |
-   | `AI_API_KEY` | your AI key |
-   | `AI_MODEL` | OpenAI: `gpt-4o-mini` · Anthropic: `claude-sonnet-5-5` |
-   | `AI_BASE_URL` | OpenAI: `https://api.openai.com/v1` · Anthropic: `https://api.anthropic.com/v1` |
+   | `AI_PROVIDER` | `groq`, `openai`, `anthropic`, `openrouter`, `gemini`, `deepseek`, `mistral` or `together` |
+   | `AI_API_KEY` | your AI key from that provider |
+   | `AI_MODEL` | leave blank for the default model, or enter a model ID from your provider |
+   | `AI_BASE_URL` | leave blank (EDITH fills in the provider's address) |
    | `OWNER_USER_ID` | the User UID from A4 |
    | `SUPABASE_URL` | the Project URL from A5 |
    | `SUPABASE_SERVICE_ROLE_KEY` | the service_role / secret key from A5 |
 
-   Other AI services that use the OpenAI format (OpenRouter, Groq, …) work with
-   `AI_PROVIDER=openai` and their own `AI_BASE_URL`. See [API_SETUP.md](API_SETUP.md).
+   Default models: groq `llama-3.3-70b-versatile`, openai `gpt-4o-mini`, anthropic
+   `claude-sonnet-5-5`. Providers rename models over time. If you see "endpoint or model not
+   found", copy a current model ID from your provider's dashboard into `AI_MODEL`.
+   See [API_SETUP.md](API_SETUP.md) for other services.
 5. Click **Apply** (or **Deploy Blueprint**). The first build takes about 5–8 minutes.
    When it says **Live**, your address is shown at the top, like
    `https://edith-ai-xxxx.onrender.com`.

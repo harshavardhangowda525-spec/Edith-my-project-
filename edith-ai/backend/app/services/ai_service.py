@@ -72,11 +72,11 @@ class OpenAICompatibleProvider:
     name = "openai"
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        if not settings.ai_api_key:
-            raise ConfigurationError("AI_API_KEY is not set on the server. Set it in backend/.env "
-                                     "or use AI_PROVIDER=mock.")
+        if settings.ai_provider_problem:
+            raise ConfigurationError(settings.ai_provider_problem)
         self.s = settings
         self.client = client
+        self.name = settings.ai_provider  # e.g. "groq" - shown in the UI status
 
     async def complete(self, system: str, messages: list[dict[str, str]], model: str) -> Completion:
         payload = {
@@ -85,7 +85,7 @@ class OpenAICompatibleProvider:
             "max_tokens": self.s.ai_max_output_tokens,
             "temperature": self.s.ai_temperature,
         }
-        headers = {"Authorization": f"Bearer {self.s.ai_api_key}"}
+        headers = {"Authorization": f"Bearer {self.s.ai_api_key}"} if self.s.ai_api_key else {}
         url = self.s.ai_base_url.rstrip("/") + "/chat/completions"
         try:
             async with _client(self.client, self.s.ai_timeout_seconds) as c:
@@ -108,9 +108,8 @@ class AnthropicProvider:
     API_URL = "https://api.anthropic.com/v1/messages"
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
-        if not settings.ai_api_key:
-            raise ConfigurationError("AI_API_KEY is not set on the server. Set it in backend/.env "
-                                     "or use AI_PROVIDER=mock.")
+        if settings.ai_provider_problem:
+            raise ConfigurationError(settings.ai_provider_problem)
         self.s = settings
         self.client = client
 
@@ -171,9 +170,12 @@ class _client:
 
 
 def build_provider(settings: Settings) -> Provider:
-    if settings.ai_provider == "mock":
+    kind = settings.ai_provider_kind
+    if kind is None:
+        raise ConfigurationError(settings.ai_provider_problem or "Unsupported AI_PROVIDER")
+    if kind == "mock":
         return MockProvider()
-    if settings.ai_provider == "anthropic":
+    if kind == "anthropic":
         return AnthropicProvider(settings)
     return OpenAICompatibleProvider(settings)
 

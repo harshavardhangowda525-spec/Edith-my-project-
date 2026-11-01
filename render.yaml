@@ -21,13 +21,13 @@ services:
       - key: OWNER_USER_ID          # your user's UUID from Supabase -> Authentication -> Users
         sync: false
       # --- AI provider ---
-      - key: AI_PROVIDER            # openai | anthropic
+      - key: AI_PROVIDER            # groq | openai | anthropic | openrouter | gemini | ...
         sync: false
       - key: AI_API_KEY
         sync: false
-      - key: AI_MODEL               # e.g. gpt-4o-mini or claude-sonnet-5-5
+      - key: AI_MODEL               # optional: leave blank for the provider's default model
         sync: false
-      - key: AI_BASE_URL            # https://api.openai.com/v1 or https://api.anthropic.com/v1
+      - key: AI_BASE_URL            # optional: leave blank (filled in from AI_PROVIDER)
         sync: false
       # --- permanent memory (Supabase) ---
       - key: STORAGE_BACKEND

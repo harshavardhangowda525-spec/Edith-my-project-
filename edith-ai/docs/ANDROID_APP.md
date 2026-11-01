@@ -62,6 +62,37 @@ The first start takes a few seconds while the offline speech model is prepared.
 "Hey Edith", pause briefly, wait for the beep, then ask. Turn it off to also wake when "Edith"
 appears inside a longer sentence. That's more responsive but wakes by mistake more often.
 
+## Phone control: calls, apps, music, alarms
+
+Say "Edith", wait for the beep, then:
+
+| Say | EDITH does |
+|---|---|
+| "Call Mom" / "Call Rahul Sharma" | Finds the contact on your phone, says "Calling Mom", waits **3 seconds** (tap **Cancel call** in the notification to stop), then calls |
+| "Open Instagram" / "Open camera" | Opens the app |
+| "Open Spotify and play my favourite music" | Plays your *favourite music* (set it in the app) on Spotify |
+| "Play Arijit Singh" / "Play lo-fi beats on YouTube Music" | Searches and plays it |
+| "Pause" / "Resume" / "Next song" / "Previous song" / "Volume up" | Controls what's playing |
+| "Set an alarm for 6 AM" / "Timer for 10 minutes" | Sets it in your Clock app |
+| "Navigate to the airport" | Starts Google Maps directions |
+
+**Turn it on** in the app under **4 · Phone control**:
+1. **Allow calls**: grants *Contacts* and *Phone*. Contact names are matched **on your phone**;
+   your contact list is never sent to the server.
+2. **Allow opening apps & music**: turn on *Display over other apps* for EDITH. Android needs
+   this to let a background app open other apps (music, Maps, Clock). Without it, EDITH shows a
+   notification you tap instead.
+3. **My favourite music**: e.g. `Liked Songs`, `Arijit Singh`, `90s Bollywood`. Left blank, the music
+   app plays its own pick (usually your recent music). Choose **Spotify**, **YouTube Music** or **JioSaavn**.
+
+Good to know:
+* If two contacts match ("Rahul Sharma" and "Rahul Office"), EDITH asks you to say the full name
+  instead of guessing. "Mom", "Mummy", "Amma", "Papa", "Dad", "Appa", etc. are understood.
+* EDITH pauses listening during phone and WhatsApp calls, and resumes afterwards.
+* On a locked phone, music, calls, alarms and timers work; apps you open appear after you unlock.
+* EDITH can't tap buttons inside other apps or read your screen. That would need full
+  screen access, which we deliberately don't use.
+
 ## Meeting mode: answers to the client's questions, automatically
 
 Tap **Start Meeting mode** and confirm that everyone in the meeting knows an AI assistant is

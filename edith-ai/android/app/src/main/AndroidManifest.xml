@@ -12,11 +12,43 @@
     <!-- Needed on Android 12+ to use a Bluetooth headset microphone -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <!-- Phone control (each one is switched on by the user in the app) -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.CALL_PHONE" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <!-- Calling is optional: the app also installs on phones/tablets without a SIM -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="true" />
 
     <queries>
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
+        <!-- to find and open installed apps by name -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SET_ALARM" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <package android:name="com.spotify.music" />
+        <package android:name="com.google.android.apps.youtube.music" />
+        <package android:name="com.google.android.youtube" />
+        <package android:name="com.jio.media.jiobeats" />
+        <package android:name="com.gaana" />
+        <package android:name="com.bsbportal.music" />
+        <package android:name="com.amazon.mp3" />
+        <package android:name="com.apple.android.music" />
+        <package android:name="com.google.android.apps.maps" />
     </queries>
 
     <application

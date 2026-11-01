@@ -28,6 +28,16 @@ class Prefs(context: Context) {
         get() = p.getBoolean("media_button", false)
         set(v) = p.edit().putBoolean("media_button", v).apply()
 
+    /** What "play my favourite music" plays, e.g. "Liked Songs", "Arijit Singh" (blank = app's pick). */
+    var favoriteMusic: String
+        get() = p.getString("favorite_music", "") ?: ""
+        set(v) = p.edit().putString("favorite_music", v).apply()
+
+    /** Default music app key: spotify, youtube_music, jiosaavn, ... */
+    var musicApp: String
+        get() = p.getString("music_app", "spotify") ?: "spotify"
+        set(v) = p.edit().putString("music_app", v).apply()
+
     /** What is missing before EDITH can listen, or null when ready. */
     fun missing(): String? = when {
         serverUrl.isBlank() -> "Enter your EDITH server address."

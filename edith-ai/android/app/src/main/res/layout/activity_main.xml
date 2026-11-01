@@ -120,6 +120,45 @@
             style="@style/Radio"
             android:text="Headphone play/pause button also asks EDITH (may take over music controls)" />
 
+        <!-- ===== Phone control ===== -->
+        <TextView style="@style/Section" android:text="4 · Phone control" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="Say “Edith, call Mom”, “open Instagram”, “play my favourite music on Spotify”, “pause”, “next song”, “set an alarm for 6 AM”, “timer 10 minutes”, “navigate to the airport”." />
+
+        <TextView
+            android:id="@+id/phoneStatus"
+            style="@style/Hint"
+            android:textColor="@color/accent_light" />
+
+        <Button
+            android:id="@+id/allowCalls"
+            style="@style/SmallButton"
+            android:text="Allow calls (contacts + phone)" />
+
+        <Button
+            android:id="@+id/allowApps"
+            style="@style/SmallButton"
+            android:text="Allow opening apps &amp; music (display over other apps)" />
+
+        <TextView style="@style/Label" android:text="My favourite music" />
+        <EditText
+            android:id="@+id/favoriteMusic"
+            style="@style/Input"
+            android:hint="e.g. Liked Songs, Arijit Singh, lo-fi beats"
+            android:inputType="text" />
+
+        <TextView style="@style/Label" android:text="Music app" />
+        <RadioGroup
+            android:id="@+id/musicApp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/musicSpotify" style="@style/Radio" android:text="Spotify" />
+            <RadioButton android:id="@+id/musicYtMusic" style="@style/Radio" android:text="YouTube Music" />
+            <RadioButton android:id="@+id/musicJioSaavn" style="@style/Radio" android:text="JioSaavn" />
+        </RadioGroup>
+
         <Button
             android:id="@+id/battery"
             style="@style/SmallButton"

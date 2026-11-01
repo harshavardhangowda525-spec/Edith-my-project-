@@ -95,6 +95,7 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
+    testImplementation("junit:junit:4.13.2")
 }
 
 tasks.named("preBuild") { dependsOn(fetchVoskModel) }

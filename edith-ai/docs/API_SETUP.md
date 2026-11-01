@@ -135,6 +135,7 @@ Allowed in production. The app shows an unlock screen and stores the password on
 | `/api/chat` | POST | ✓ (rate-limited) | Message EDITH |
 | `/api/voice/transcribe` | POST (multipart `audio`) | ✓ (rate-limited) | Audio → text |
 | `/api/voice/speak` | POST | ✓ (rate-limited) | Text → `audio/mpeg` |
+| `/api/assistant` | POST | ✓ (rate-limited) | Phone app voice entry: returns a phone action (call/open app/music/alarm/timer/navigate) or an answer |
 | `/api/memory` | GET / POST | ✓ | List / save approved memories |
 | `/api/memory/{id}` | PATCH / DELETE | ✓ | Update / delete an owned memory |
 | `/api/memory/settings` | GET / PUT | ✓ | Persistent memory on/off |

@@ -82,6 +82,8 @@ class EdithService : Service() {
 
     private val running = AtomicBoolean(false)
     private val askNow = AtomicBoolean(false)
+    private val cancelCall = AtomicBoolean(false)
+    private val audioManager by lazy { getSystemService(AudioManager::class.java) }
     private var worker: Thread? = null
     private var tts: TextToSpeech? = null
     private val ttsReady = CountDownLatch(1)
@@ -116,6 +118,7 @@ class EdithService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_ASK -> askNow.set(true)
+            ACTION_CANCEL_CALL -> { cancelCall.set(true); return START_NOT_STICKY }
             ACTION_MEETING_ON -> EdithState.meetingMode = true
             ACTION_MEETING_OFF -> EdithState.meetingMode = false
         }
@@ -177,6 +180,21 @@ class EdithService : Service() {
             var partialHits = 0
             var frameCount = 0
             while (running.get()) {
+                // 0) Give the microphone to phone/WhatsApp calls; resume afterwards.
+                if (inPhoneCall()) {
+                    current.close()
+                    mic = null
+                    setStatus("Paused during your call")
+                    while (running.get() && inPhoneCall()) Thread.sleep(1000)
+                    if (!running.get()) break
+                    Thread.sleep(800)
+                    current = openMic(prefs, phoneOnly = meeting) ?: return
+                    mic = current
+                    recognizer.reset()
+                    seg.reset()
+                    setStatus(listening)
+                    continue
+                }
                 // 1) Read audio. A broken or silenced microphone is reopened instead of looping forever.
                 if (!current.read(buf)) {
                     if (current.needsReopen) {
@@ -450,17 +468,82 @@ class EdithService : Service() {
                 return
             }
             EdithState.update(question = question, answer = "")
-            val answer = api.chat(question, history.toList(), lang).ifBlank { "I don't have an answer for that." }
+            val result = api.assistant(question, history.toList(), lang)
+            val spoken = result.action?.let { performAction(it, result.say, prefs) }
+                ?: result.reply.ifBlank { "I don't have an answer for that." }.also {
+                    EdithState.update(answer = it)
+                    setStatus("Speaking…")
+                    speak(it)
+                }
             history.addLast(EdithApi.Turn("user", question))
-            history.addLast(EdithApi.Turn("assistant", answer))
+            history.addLast(EdithApi.Turn("assistant", spoken))
             while (history.size > 12) history.removeFirst()
-            EdithState.update(answer = answer)
-            setStatus("Speaking…")
-            speak(answer)
         } catch (e: EdithException) {
             EdithState.update(answer = "⚠ ${e.message}")
             speak(e.message ?: "Something went wrong.")
         }
+    }
+
+    /** Runs a phone action (call, open app, music, ...). Returns what EDITH said, for the history. */
+    private fun performAction(action: org.json.JSONObject, say: String, prefs: Prefs): String {
+        val actions = PhoneActions(this, prefs)
+        return when (val plan = actions.plan(action, say)) {
+            is PhoneActions.Plan.Fail -> {
+                EdithState.update(answer = "⚠ ${plan.say}")
+                speak(plan.say)
+                plan.say
+            }
+            is PhoneActions.Plan.Do -> {
+                EdithState.update(answer = plan.say.ifBlank { "✓ ${say}" })
+                if (!plan.sayAfter && plan.say.isNotBlank()) speak(plan.say)
+                val problem = plan.run()
+                if (plan.sayAfter && plan.say.isNotBlank()) speak(plan.say)
+                problem?.let { EdithState.update(answer = "⚠ $it"); speak(it) }
+                problem ?: plan.say
+            }
+            is PhoneActions.Plan.Call -> {
+                // Safety: announce and give 3 seconds to cancel before dialling.
+                val name = plan.contact.name
+                cancelCall.set(false)
+                EdithState.update(answer = "📞 Calling $name… (tap Cancel call to stop)")
+                showCallCountdown(name)
+                speak("Calling $name.")
+                val deadline = System.currentTimeMillis() + 3000
+                while (System.currentTimeMillis() < deadline && !cancelCall.get() && running.get()) Thread.sleep(100)
+                updateNotification("Listening…")
+                if (cancelCall.get() || !running.get()) {
+                    EdithState.update(answer = "Call to $name cancelled.")
+                    speak("Cancelled.")
+                    "Call cancelled."
+                } else {
+                    val problem = actions.placeCall(plan.contact)
+                    problem?.let { speak(it) }
+                    "Calling $name."
+                }
+            }
+        }
+    }
+
+    private fun showCallCountdown(name: String) {
+        val flags = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        val cancel = PendingIntent.getService(this, 4,
+            Intent(this, EdithService::class.java).setAction(ACTION_CANCEL_CALL), flags)
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID,
+            NotificationCompat.Builder(this, CHANNEL)
+                .setSmallIcon(R.drawable.ic_stat_edith)
+                .setContentTitle("Calling $name in 3 seconds")
+                .setContentText("Tap Cancel call to stop")
+                .setOngoing(true)
+                .addAction(0, "Cancel call", cancel)
+                .build())
+    }
+
+    /** True while a phone/VoIP call is active: EDITH must not take the microphone. */
+    private fun inPhoneCall(): Boolean {
+        val mode = audioManager.mode
+        return mode == AudioManager.MODE_IN_CALL || mode == AudioManager.MODE_RINGTONE ||
+            (mode == AudioManager.MODE_IN_COMMUNICATION && !routing.headsetActive) ||
+            (Build.VERSION.SDK_INT >= 33 && mode == AudioManager.MODE_CALL_SCREENING)
     }
 
     /** Records until the speaker pauses. Returns WAV bytes, or null if nobody spoke. */
@@ -656,6 +739,7 @@ class EdithService : Service() {
         ).toString()
         const val ACTION_STOP = "ai.edith.assistant.STOP"
         const val ACTION_ASK = "ai.edith.assistant.ASK"
+        const val ACTION_CANCEL_CALL = "ai.edith.assistant.CANCEL_CALL"
         const val ACTION_MEETING_ON = "ai.edith.assistant.MEETING_ON"
         const val ACTION_MEETING_OFF = "ai.edith.assistant.MEETING_OFF"
         private val QUESTION_STARTS = setOf(

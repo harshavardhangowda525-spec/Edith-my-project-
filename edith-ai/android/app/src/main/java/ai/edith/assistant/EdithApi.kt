@@ -57,6 +57,25 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         return JSONObject(res).optString("reply").trim()
     }
 
+    data class Assistant(val action: JSONObject?, val say: String, val reply: String)
+
+    /** Voice entry point: either a phone action to perform, or a spoken answer. */
+    fun assistant(message: String, history: List<Turn>, language: String?): Assistant {
+        val payload = JSONObject()
+            .put("message", message)
+            .put("mode", "earbud")
+            .put("history", JSONArray().apply {
+                history.takeLast(12).forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
+            })
+        if (!language.isNullOrBlank()) payload.put("language", language)
+        val res = JSONObject(request("POST", "/api/assistant", payload.toString().toByteArray(), "application/json"))
+        return Assistant(
+            action = if (res.optString("kind") == "action") res.optJSONObject("action") else null,
+            say = if (res.isNull("say")) "" else res.optString("say"),
+            reply = if (res.isNull("reply")) "" else res.optString("reply").trim(),
+        )
+    }
+
     data class MeetingHelp(val question: String?, val answer: String?)
 
     /** Live meeting help. Returns answer = null when there is nothing worth answering. */

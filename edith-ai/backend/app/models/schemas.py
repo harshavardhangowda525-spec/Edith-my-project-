@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -48,6 +48,18 @@ class ChatResponse(BaseModel):
     mock: bool
     sources: list[Source] = Field(default_factory=list)
     memories_used: int = 0
+
+
+class AssistantResponse(BaseModel):
+    kind: Literal["action", "answer"]
+    # kind == "action": a phone action for the app to perform on the device
+    action: dict[str, Any] | None = None
+    say: str | None = None
+    # kind == "answer": a normal spoken answer
+    reply: str | None = None
+    model: str | None = None
+    mock: bool = False
+    sources: list[Source] = Field(default_factory=list)
 
 
 class MemoryCreate(BaseModel):

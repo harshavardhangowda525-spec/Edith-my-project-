@@ -36,6 +36,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var heard: TextView
     private val stateListener: () -> Unit = { render() }
 
+    private val askCallPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        render()
+        if (it.values.any { granted -> !granted }) toast("Without these permissions EDITH can't call your contacts.")
+    }
+
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         if (res[Manifest.permission.RECORD_AUDIO] == true) startEdith()
         else { EdithState.meetingMode = false; toast("EDITH needs microphone permission to hear “Edith”.") }
@@ -76,6 +81,20 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, v -> prefs.mediaButton = v }
         }
         findViewById<Button>(R.id.test).setOnClickListener { testConnection() }
+        findViewById<Button>(R.id.allowCalls).setOnClickListener {
+            askCallPermissions.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE))
+        }
+        findViewById<Button>(R.id.allowApps).setOnClickListener {
+            if (Settings.canDrawOverlays(this)) toast("Already allowed ✓")
+            else startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        }
+        bindText(R.id.favoriteMusic, prefs.favoriteMusic) { prefs.favoriteMusic = it }
+        findViewById<RadioGroup>(R.id.musicApp).apply {
+            check(when (prefs.musicApp) { "youtube_music" -> R.id.musicYtMusic; "jiosaavn" -> R.id.musicJioSaavn; else -> R.id.musicSpotify })
+            setOnCheckedChangeListener { _, id ->
+                prefs.musicApp = when (id) { R.id.musicYtMusic -> "youtube_music"; R.id.musicJioSaavn -> "jiosaavn"; else -> "spotify" }
+            }
+        }
         findViewById<Button>(R.id.battery).setOnClickListener { openBatterySettings() }
         findViewById<Button>(R.id.askNow).setOnClickListener {
             if (EdithState.running) startService(Intent(this, EdithService::class.java).setAction(EdithService.ACTION_ASK))
@@ -84,6 +103,11 @@ class MainActivity : AppCompatActivity() {
         toggle.setOnClickListener {
             if (EdithState.running) stopService(Intent(this, EdithService::class.java)) else requestAndStart()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        render() // permissions may have changed in system settings
     }
 
     override fun onStart() {
@@ -99,6 +123,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun render() {
         status.text = EdithState.status
+        val calls = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
+            .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+        val apps = Settings.canDrawOverlays(this)
+        findViewById<TextView>(R.id.phoneStatus).text =
+            "Calls: ${if (calls) "✓ allowed" else "off"}   ·   Open apps & music: ${if (apps) "✓ allowed" else "off"}"
         if (EdithState.running) {
             // 0-10 bars on a log scale: lets you see whether EDITH hears anything at all.
             val bars = (kotlin.math.ln(EdithState.micLevel + 1) / kotlin.math.ln(4000.0) * 10).toInt().coerceIn(0, 10)

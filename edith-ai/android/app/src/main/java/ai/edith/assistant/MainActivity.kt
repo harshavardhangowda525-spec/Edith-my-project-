@@ -86,7 +86,8 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.test).setOnClickListener { testConnection() }
         findViewById<Button>(R.id.allowCalls).setOnClickListener {
-            askCallPermissions.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE))
+            askCallPermissions.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE,
+                Manifest.permission.READ_PHONE_STATE))
         }
         findViewById<Button>(R.id.allowApps).setOnClickListener {
             if (Settings.canDrawOverlays(this)) toast("Already allowed ✓")
@@ -131,7 +132,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun render() {
         status.text = EdithState.status
-        val calls = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
+        val calls = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE,
+            Manifest.permission.READ_PHONE_STATE)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val apps = Settings.canDrawOverlays(this)
         findViewById<TextView>(R.id.actionLog).text =

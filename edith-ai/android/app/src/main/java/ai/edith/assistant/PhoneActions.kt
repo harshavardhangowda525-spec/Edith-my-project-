@@ -112,28 +112,68 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
         return matchContacts(spoken, all)
     }
 
-    /** Places the call directly (needs the Phone permission); otherwise opens the dialer. */
+    /**
+     * Places the call and checks that it really started. Tries, in order:
+     * 1. TelecomManager.placeCall (needs the Phone permission),
+     * 2. the standard "call" screen (ACTION_CALL, opened like any app),
+     * 3. the dialer with the number filled in (you press call).
+     */
     @SuppressLint("MissingPermission")
     fun placeCall(contact: Contact): String? {
         val number = contact.number.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
         if (number.isBlank()) return "${contact.name} has no phone number saved."
         val uri = Uri.fromParts("tel", number, null)
+        val who = "${contact.name} (${mask(number)})"
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
-            EdithState.log("Call ${contact.name}: Phone permission off – opening dialer")
+            EdithState.log("Call $who: Phone permission is OFF – opening dialer")
             return launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
                 ?: "I opened the dialer. Turn on Allow calls in EDITH so I can call directly."
         }
-        return try {
+
+        // 1) Telecom
+        try {
             ctx.getSystemService(TelecomManager::class.java).placeCall(uri, Bundle())
-            EdithState.log("Calling ${contact.name} (${mask(number)})")
-            null
+            if (callStarted()) {
+                EdithState.log("Call $who: started (Telecom)")
+                return null
+            }
+            EdithState.log("Call $who: Telecom accepted but no call started – trying call screen")
         } catch (e: Exception) {
             Log.w(TAG, "placeCall failed", e)
-            EdithState.log("Call ${contact.name} failed: ${e.javaClass.simpleName}: ${e.message}")
-            // Fall back to the dialer with the number filled in.
-            launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
-                ?: "I couldn't start the call directly, so I opened the dialer. Press call."
+            EdithState.log("Call $who: Telecom error ${e.javaClass.simpleName}: ${e.message}")
         }
+
+        // 2) Call screen (only if no call is in progress, so we never dial twice)
+        if (callStarted(500)) {
+            EdithState.log("Call $who: started (Telecom, late)")
+            return null
+        }
+        val err = launch(Intent(Intent.ACTION_CALL, uri), "the call screen")
+        if (err == null && callStarted()) {
+            EdithState.log("Call $who: started (call screen)")
+            return null
+        }
+        EdithState.log("Call $who: call screen failed${err?.let { " – $it" } ?: ""} – opening dialer")
+
+        // 3) Dialer
+        return launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
+            ?: "I couldn't start the call by myself, so I opened the dialer with the number. Press call."
+    }
+
+    /** Waits up to [timeoutMs] for the phone to enter a call. */
+    private fun callStarted(timeoutMs: Long = 5000): Boolean {
+        val am = ctx.getSystemService(AudioManager::class.java)
+        val tm = ctx.getSystemService(TelecomManager::class.java)
+        val until = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < until) {
+            if (am.mode == AudioManager.MODE_IN_CALL) return true
+            // isInCall needs READ_PHONE_STATE (part of "Allow calls"); true as soon as dialling starts.
+            val inCall = ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_PHONE_STATE) ==
+                PackageManager.PERMISSION_GRANTED && runCatching { tm.isInCall }.getOrDefault(false)
+            if (inCall) return true
+            Thread.sleep(200)
+        }
+        return false
     }
 
     private fun mask(n: String) = if (n.length > 4) "…" + n.takeLast(4) else n

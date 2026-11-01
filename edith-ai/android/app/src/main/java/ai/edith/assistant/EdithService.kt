@@ -468,6 +468,7 @@ class EdithService : Service() {
                 EdithState.update(heard = text)
                 val hist = synchronized(history) { history.toList() }
                 val res = api.assistant(text, hist, lang, followup = true)
+                if (res.kind != "ignore") logDecision(text, res)
                 when (res.kind) {
                     "ignore" -> Unit // side conversation: not for EDITH
                     "end" -> {
@@ -498,6 +499,16 @@ class EdithService : Service() {
                 conversationPending.decrementAndGet()
             }
         }
+    }
+
+    private fun logDecision(heard: String, res: EdithApi.Assistant) {
+        val what = when {
+            res.action != null -> "action ${res.action.optString("type")} → " +
+                (res.action.optString("contact").ifBlank { null } ?: res.action.optString("app").ifBlank { null }
+                ?: res.action.optString("query").ifBlank { null } ?: res.action.optString("command"))
+            else -> res.kind
+        }
+        EdithState.log("Heard \"${heard.take(60)}\" → $what")
     }
 
     private fun <T> speakingDuring(block: () -> T): T {
@@ -588,6 +599,7 @@ class EdithService : Service() {
             }
             EdithState.update(question = question, answer = "")
             val result = api.assistant(question, synchronized(history) { history.toList() }, lang)
+            logDecision(question, result)
             val spoken = result.action?.let { performAction(it, result.say, prefs) }
                 ?: result.reply.ifBlank { "I don't have an answer for that." }.also {
                     EdithState.update(answer = it)
@@ -627,6 +639,7 @@ class EdithService : Service() {
             is PhoneActions.Plan.Call -> {
                 // Safety: announce and give 3 seconds to cancel before dialling.
                 val name = plan.contact.name
+                EdithState.log("Contact match: $name")
                 cancelCall.set(false)
                 EdithState.update(answer = "📞 Calling $name… (tap Cancel call to stop)")
                 showCallCountdown(name)

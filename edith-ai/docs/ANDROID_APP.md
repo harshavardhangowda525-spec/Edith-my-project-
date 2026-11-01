@@ -109,8 +109,10 @@ Say "Edith", wait for the beep, then:
    app plays its own pick (usually your recent music). Choose **Spotify**, **YouTube Music** or **JioSaavn**.
 
 Good to know:
-* If two contacts match ("Rahul Sharma" and "Rahul Office"), EDITH asks you to say the full name
-  instead of guessing. "Mom", "Mummy", "Amma", "Papa", "Dad", "Appa", etc. are understood.
+* A contact saved exactly as you say it ("Mom") is called straight away. If several match ("Mom Jio",
+  "Mom Airtel", "Mummy"), EDITH asks **"Which one?"**. Answer "the first one", "second", or a name
+  like "Jio". It **remembers your answer**, so next time "call mom" calls that contact directly
+  (same for WhatsApp and email). See or clear remembered choices in section 4. "Mom", "Mummy", "Amma", "Papa", "Dad", "Appa", etc. are understood.
 * EDITH pauses listening during phone and WhatsApp calls, and resumes afterwards.
 * On a locked phone, music, calls, alarms and timers work; apps you open appear after you unlock.
 * **Xiaomi / Redmi / POCO / Oppo / Vivo / Realme:** these phones have an extra switch. Tap the

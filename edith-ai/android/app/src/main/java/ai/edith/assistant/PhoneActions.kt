@@ -45,6 +45,8 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
         data class Do(val say: String, val sayAfter: Boolean = false, val run: () -> String?) : Plan()
         data class Call(val contact: Contact) : Plan()
         data class Fail(val say: String) : Plan()
+        /** Several contacts match [spoken]: ask which one, then continue with [then]. */
+        data class Choose(val spoken: String, val options: List<Contact>, val then: (Contact) -> Plan) : Plan()
         /** Read back [prompt] and only run [onYes] after the user says "yes". */
         data class Confirm(val prompt: String, val doneSay: String = "Done.", val onYes: () -> String?) : Plan()
         data class Leads(val query: String) : Plan()
@@ -93,10 +95,11 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             return Plan.Fail("I need permission to read your contacts. Turn on calls in the EDITH app.")
         }
-        val matches = findContacts(spoken)
+        val matches = resolve(spoken, findContacts(spoken)) { findContacts(it) }
         return when {
             matches.isEmpty() -> Plan.Fail("I couldn't find $spoken in your contacts.")
             matches.size == 1 -> Plan.Call(matches[0])
+            matches.size > 1 -> Plan.Choose(spoken, matches.take(4)) { Plan.Call(it) }
             else -> Plan.Fail("I found ${matches.take(3).joinToString(" and ") { it.name }}. Please say the full name.")
         }
     }
@@ -120,6 +123,18 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
             }
         }
         return matchContacts(spoken, all)
+    }
+
+    /**
+     * Applies a remembered choice ("mom" -> "Mom Jio") when several contacts match.
+     * [lookup] searches contacts for a given name.
+     */
+    private fun resolve(spoken: String, matches: List<Contact>, lookup: (String) -> List<Contact>): List<Contact> {
+        if (matches.size <= 1) return matches
+        val key = normalise(spoken).removePrefix("my ").trim()
+        val remembered = prefs.contactAliases[key] ?: return matches
+        val hit = lookup(remembered).filter { normalise(it.name) == normalise(remembered) }
+        return if (hit.size == 1) hit.also { EdithState.log("Using remembered choice: \"$key\" = ${it[0].name}") } else matches
     }
 
     /**
@@ -218,12 +233,15 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
             return Plan.Fail("I need permission to read your contacts. Turn on calls in the EDITH app.")
         }
-        val matches = findContacts(to)
-        val contact = when {
-            matches.isEmpty() -> return Plan.Fail("I couldn't find $to in your contacts.")
-            matches.size > 1 -> return Plan.Fail("I found ${matches.take(3).joinToString(" and ") { it.name }}. Please say the full name.")
-            else -> matches[0]
+        val matches = resolve(to, findContacts(to)) { findContacts(it) }
+        return when {
+            matches.isEmpty() -> Plan.Fail("I couldn't find $to in your contacts.")
+            matches.size > 1 -> Plan.Choose(to, matches.take(4)) { whatsAppTo(it, message, pkg) }
+            else -> whatsAppTo(matches[0], message, pkg)
         }
+    }
+
+    private fun whatsAppTo(contact: Contact, message: String, pkg: String): Plan {
         val phone = whatsAppNumber(contact.number)
             ?: return Plan.Fail("${contact.name}'s number has no country code. Set your country code in EDITH settings.")
         val text = message.trim()
@@ -262,13 +280,17 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
             if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
                 return Plan.Fail("I need permission to read your contacts. Turn on calls in the EDITH app.")
             }
-            val matches = findContactEmails(to)
+            val matches = resolve(to, findContactEmails(to)) { findContactEmails(it) }
             when {
                 matches.isEmpty() -> return Plan.Fail("I couldn't find an email address for $to in your contacts.")
-                matches.size > 1 -> return Plan.Fail("I found ${matches.take(3).joinToString(" and ") { it.name }}. Please say the full name.")
+                matches.size > 1 -> return Plan.Choose(to, matches.take(4)) { emailTo(it.name, it.number, instruction, api) }
                 else -> matches[0].name to matches[0].number
             }
         }
+        return emailTo(name, address, instruction, api)
+    }
+
+    private fun emailTo(name: String, address: String, instruction: String, api: EdithApi): Plan {
         val draft = try {
             api.emailDraft(name, instruction)
         } catch (e: EdithException) {
@@ -560,7 +582,7 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
                 val n = normalise(name)
                 val nickScore = nicknames.maxOfOrNull { v ->
                     when {
-                        n == v -> 100
+                        n == v -> 95 // a contact saved exactly as spoken ("Mom") wins over "Mummy"
                         v.length >= 4 && n.split(' ').first() == v -> 75
                         else -> 0
                     }
@@ -589,6 +611,29 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
             val firstSim = similarity(wanted, nw.first())
             if (firstSim >= 0.85 && wanted.length >= 4) return (40 * firstSim).toInt()
             return 0
+        }
+
+        private val ORDINALS = mapOf(
+            "first" to 0, "1st" to 0, "one" to 0, "1" to 0, "second" to 1, "2nd" to 1, "two" to 1, "2" to 1,
+            "third" to 2, "3rd" to 2, "three" to 2, "3" to 2, "fourth" to 3, "4th" to 3, "four" to 3, "4" to 3,
+        )
+        private val FILLER = setOf("the", "a", "call", "number", "contact", "please", "that", "this", "one", "it", "is", "with")
+
+        /**
+         * Which option did the user pick? "the first one", "second", "last", "Jio", "Mom Airtel".
+         * Returns the index, or null when unclear.
+         */
+        fun parseChoice(reply: String, names: List<String>): Int? {
+            val words = normalise(reply).split(' ').filter { it.isNotBlank() }
+            if (words.isEmpty()) return null
+            if ("last" in words) return names.lastIndex
+            words.firstNotNullOfOrNull { ORDINALS[it] }?.takeIf { it < names.size }?.let { return it }
+            val content = words.filter { it !in FILLER }
+            if (content.isEmpty()) return null
+            val normNames = names.map { normalise(it) }
+            normNames.indexOfFirst { it == content.joinToString(" ") }.takeIf { it >= 0 }?.let { return it }
+            val hits = normNames.withIndex().filter { (_, n) -> content.all { w -> n.split(' ').any { it == w || similarity(it, w) >= 0.8 } } }
+            return hits.singleOrNull()?.index
         }
 
         /** 1.0 = identical; Levenshtein-based. */

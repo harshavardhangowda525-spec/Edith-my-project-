@@ -121,6 +121,12 @@ class EdithService : Service() {
     }
     @Volatile private var pendingConfirm: Pending? = null
 
+    /** "I found Mom Jio and Mom Airtel. Which one?" waiting for the answer. */
+    private class Choice(val plan: PhoneActions.Plan.Choose, val type: String, val until: Long) {
+        var unclear = 0
+    }
+    @Volatile private var pendingChoice: Choice? = null
+
     /** Leads being read out one by one. */
     private class LeadSession(val query: String, val leads: List<org.json.JSONObject>) {
         var index = 0
@@ -674,7 +680,25 @@ class EdithService : Service() {
     /** Runs a phone action (call, open app, music, ...). Returns what EDITH said, for the history. */
     private fun performAction(action: org.json.JSONObject, say: String, prefs: Prefs): String {
         val actions = PhoneActions(this, prefs, EdithApi(prefs.serverUrl, prefs.password))
-        return when (val plan = actions.plan(action, say)) {
+        return runPlan(actions.plan(action, say), actions, action.optString("type"), say, prefs)
+    }
+
+    private fun runPlan(plan: PhoneActions.Plan, actions: PhoneActions, type: String, say: String, prefs: Prefs): String {
+        return when (plan) {
+            is PhoneActions.Plan.Choose -> {
+                pendingChoice = Choice(plan, type, System.currentTimeMillis() + 60_000)
+                forceConversation = true
+                val names = plan.options.map { it.name }
+                val list = when (names.size) {
+                    2 -> "${names[0]} and ${names[1]}"
+                    else -> names.dropLast(1).joinToString(", ") + " and " + names.last()
+                }
+                val ask = "I found $list. Which one?"
+                EdithState.update(answer = "Which one?\n" + names.mapIndexed { i, n -> "${i + 1}. $n" }.joinToString("\n"))
+                EdithState.log("Asked which contact: $list")
+                speak(ask)
+                ask
+            }
             is PhoneActions.Plan.Confirm -> {
                 pendingConfirm = Pending(plan.prompt, plan.doneSay, plan.onYes, System.currentTimeMillis() + 60_000)
                 forceConversation = true
@@ -684,7 +708,7 @@ class EdithService : Service() {
             }
             is PhoneActions.Plan.Leads -> startLeads(plan.query, prefs)
             is PhoneActions.Plan.Fail -> {
-                EdithState.log("${action.optString("type")}: ${plan.say}")
+                EdithState.log("$type: ${plan.say}")
                 EdithState.update(answer = "⚠ ${plan.say}")
                 speak(plan.say)
                 plan.say
@@ -693,7 +717,7 @@ class EdithService : Service() {
                 EdithState.update(answer = plan.say.ifBlank { "✓ ${say}" })
                 if (!plan.sayAfter && plan.say.isNotBlank()) speak(plan.say)
                 val problem = plan.run()
-                if (problem == null) EdithState.log("${action.optString("type")}: done – ${plan.say.ifBlank { say }}")
+                if (problem == null) EdithState.log("$type: done – ${plan.say.ifBlank { say }}")
                 if (plan.sayAfter && plan.say.isNotBlank()) speak(plan.say)
                 problem?.let { EdithState.update(answer = "⚠ $it"); speak(it) }
                 problem ?: plan.say
@@ -773,6 +797,36 @@ class EdithService : Service() {
     private fun handleLocalReply(text: String, prefs: Prefs): Boolean {
         val t = text.lowercase().replace(Regex("[^a-z0-9' ]"), " ").replace(Regex("\\s+"), " ").trim()
             .removePrefix("hey ").removePrefix("edith ").trim()
+        pendingChoice?.let { c ->
+            if (System.currentTimeMillis() > c.until) {
+                pendingChoice = null
+                return@let
+            }
+            // "no, the second one" still picks the second: check the choice before cancelling.
+            val idx = PhoneActions.parseChoice(t, c.plan.options.map { it.name })
+            if (idx == null && (NO_RE.containsMatchIn(t) || t == "none" || t == "neither")) {
+                pendingChoice = null
+                speakWhisper("Okay, cancelled.")
+                return true
+            }
+            if (idx == null) {
+                c.unclear++
+                if (c.unclear >= 2) {
+                    pendingChoice = null
+                    speakWhisper("I'll leave it. Say the full name next time.")
+                } else {
+                    speakWhisper("Which one? Say first, second, or the name.")
+                }
+                return true
+            }
+            pendingChoice = null
+            val chosen = c.plan.options[idx]
+            prefs.rememberContact(c.plan.spoken, chosen.name)
+            EdithState.log("Remembered: \"${c.plan.spoken}\" = ${chosen.name}")
+            val actions = PhoneActions(this, prefs, EdithApi(prefs.serverUrl, prefs.password))
+            speakingDuring { runPlan(c.plan.then(chosen), actions, c.type, "", prefs) }
+            return true
+        }
         pendingConfirm?.let { p ->
             if (System.currentTimeMillis() > p.until) {
                 pendingConfirm = null

@@ -94,6 +94,11 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.READ_PHONE_STATE))
         }
         findViewById<Button>(R.id.testCall).setOnClickListener { testCall() }
+        findViewById<Button>(R.id.clearAliases).setOnClickListener {
+            prefs.contactAliases = emptyMap()
+            toast("Forgotten. EDITH will ask again when several contacts match.")
+            render()
+        }
         findViewById<Button>(R.id.registerHeadphones).setOnClickListener {
             if (Build.VERSION.SDK_INT >= 31 &&
                 ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
@@ -190,6 +195,10 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.READ_PHONE_STATE)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val apps = Settings.canDrawOverlays(this)
+        val aliases = prefs.contactAliases
+        findViewById<TextView>(R.id.aliases).text = if (aliases.isEmpty())
+            "Remembered contacts: none yet. When several contacts match, EDITH asks which one and remembers your answer."
+        else "Remembered contacts: " + aliases.entries.joinToString("   ·   ") { "“${it.key}” → ${it.value}" }
         findViewById<TextView>(R.id.actionLog).text =
             EdithState.actionLog.joinToString("\n").ifBlank { "Nothing yet" }
         findViewById<TextView>(R.id.phoneStatus).text =

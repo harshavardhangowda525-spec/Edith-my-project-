@@ -65,6 +65,16 @@ class Prefs(context: Context) {
         get() = p.getString("about_me", "") ?: ""
         set(v) = p.edit().putString("about_me", v).apply()
 
+    /** Remembered contact choices: what you say ("mom") -> saved contact name ("Mom Jio"). */
+    var contactAliases: Map<String, String>
+        get() = (p.getStringSet("contact_aliases", emptySet()) ?: emptySet())
+            .mapNotNull { e -> e.split('|', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }.toMap()
+        set(v) = p.edit().putStringSet("contact_aliases", v.map { "${it.key}|${it.value}" }.toSet()).apply()
+
+    fun rememberContact(spoken: String, contactName: String) {
+        contactAliases = contactAliases + (PhoneActions.normalise(spoken).removePrefix("my ").trim() to contactName)
+    }
+
     /** What is missing before EDITH can listen, or null when ready. */
     fun missing(): String? = when {
         serverUrl.isBlank() -> "Enter your EDITH server address."

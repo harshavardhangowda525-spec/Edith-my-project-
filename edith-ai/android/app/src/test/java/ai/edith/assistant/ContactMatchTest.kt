@@ -43,3 +43,37 @@ class ContactMatchTest {
         assertTrue(PhoneActions.similarity("rahul", "mehta") < 0.5)
     }
 }
+
+class ContactChoiceTest {
+    private val book = listOf(
+        Triple("Mom", "+91 90000 00010", false),
+        Triple("Mummy", "+91 90000 00011", false),
+        Triple("Mom Jio", "+91 90000 00012", false),
+    )
+
+    @Test fun exactSavedNameBeatsNickname() =
+        assertEquals(listOf("Mom"), PhoneActions.matchContacts("mom", book).map { it.name })
+
+    @Test fun nicknameStillWorksWhenNoExact() =
+        assertEquals(listOf("Mummy"), PhoneActions.matchContacts("mom", book.filter { it.first != "Mom" }).map { it.name })
+
+    private val options = listOf("Mom Jio", "Mom Airtel", "Mummy")
+    @Test fun ordinals() {
+        assertEquals(0, PhoneActions.parseChoice("the first one", options))
+        assertEquals(1, PhoneActions.parseChoice("second", options))
+        assertEquals(1, PhoneActions.parseChoice("no, the second one", options))
+        assertEquals(2, PhoneActions.parseChoice("last one", options))
+        assertEquals(2, PhoneActions.parseChoice("3", options))
+    }
+    @Test fun byName() {
+        assertEquals(0, PhoneActions.parseChoice("Jio", options))
+        assertEquals(1, PhoneActions.parseChoice("call mom airtel", options))
+        assertEquals(2, PhoneActions.parseChoice("mummy", options))
+        assertEquals(1, PhoneActions.parseChoice("airtell", options)) // small mishearing
+    }
+    @Test fun unclear() {
+        assertEquals(null, PhoneActions.parseChoice("mom", options))   // matches two
+        assertEquals(null, PhoneActions.parseChoice("hmm", options))
+        assertEquals(null, PhoneActions.parseChoice("tenth", options))
+    }
+}

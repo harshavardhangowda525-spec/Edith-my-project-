@@ -169,6 +169,15 @@
             style="@style/SmallButton"
             android:text="📞 Test call (shows exactly what fails)" />
 
+        <TextView
+            android:id="@+id/aliases"
+            style="@style/Hint" />
+
+        <Button
+            android:id="@+id/clearAliases"
+            style="@style/SmallButton"
+            android:text="Forget remembered contact choices" />
+
         <Button
             android:id="@+id/allowApps"
             style="@style/SmallButton"

@@ -48,11 +48,17 @@ object EdithState {
     @Volatile var status = "Stopped"
     @Volatile var lastQuestion = ""
     @Volatile var lastAnswer = ""
+    @Volatile var micLevel = 0.0
     private val main = Handler(Looper.getMainLooper())
     private val listeners = mutableSetOf<() -> Unit>()
 
     fun addListener(l: () -> Unit) = listeners.add(l)
     fun removeListener(l: () -> Unit) = listeners.remove(l)
+    fun level(rms: Double) {
+        micLevel = rms
+        main.post { listeners.toList().forEach { it() } }
+    }
+
     fun update(status: String? = null, question: String? = null, answer: String? = null) {
         status?.let { this.status = it }
         question?.let { lastQuestion = it }
@@ -136,42 +142,60 @@ class EdithService : Service() {
             return
         }
         var recognizer: Recognizer? = null
-        var recorder: AudioRecord? = null
+        var mic: Mic? = null
         try {
             recognizer = Recognizer(model, SAMPLE_RATE.toFloat(), WAKE_GRAMMAR)
-            val headsetInput = if (prefs.micSource == "headset") routing.useHeadsetMic() else null
-            val source = if (headsetInput != null) MediaRecorder.AudioSource.VOICE_COMMUNICATION
-            else MediaRecorder.AudioSource.VOICE_RECOGNITION
-            val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            recorder = AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                maxOf(minBuf, FRAME * 2 * 8))
-            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-                fail("Could not open the microphone. Is another app using it?")
-                return
-            }
-            headsetInput?.let { recorder.preferredDevice = it }
-            recorder.startRecording()
-            val micName = if (headsetInput != null) "headphone mic" else "phone mic"
-            val listening = "Listening for \"Edith\" ($micName)"
+            var current: Mic = openMic(prefs) ?: return
+            mic = current
+            var listening = "Listening for \"Edith\" (${current.name})"
             setStatus(listening)
 
             val buf = ShortArray(FRAME)
             var noise = 300.0
+            var partialHits = 0
+            var frameCount = 0
             while (running.get()) {
-                if (!readFully(recorder, buf)) continue
-                val manual = askNow.getAndSet(false)
-                val detected = recognizer.acceptWaveForm(buf, buf.size) &&
-                    isWakeWord(recognizer.result, prefs.strictWake)
-                if (!detected && !manual) {
-                    noise = noise * 0.98 + rms(buf) * 0.02 // track background level
+                // 1) Read audio. A broken or silenced microphone is reopened instead of looping forever.
+                if (!current.read(buf)) {
+                    if (current.needsReopen) {
+                        Log.w(TAG, "Microphone stopped delivering audio - reopening")
+                        current.close()
+                        mic = null
+                        Thread.sleep(300)
+                        current = openMic(prefs) ?: return
+                        mic = current
+                        listening = "Listening for \"Edith\" (${current.name})"
+                        setStatus(listening)
+                        recognizer.reset()
+                    }
                     continue
                 }
-                handleQuestion(recorder, FRAME, SAMPLE_RATE, noise, prefs)
-                recognizer.reset()
-                if (running.get()) {
-                    if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) recorder.startRecording()
-                    setStatus(listening)
+                val level = rms(buf)
+                if (++frameCount % 5 == 0) EdithState.level(level)
+
+                // 2) Wake word: a finished phrase, or "Edith" followed by a short pause.
+                val manual = askNow.getAndSet(false)
+                var detected = false
+                if (recognizer.acceptWaveForm(buf, buf.size)) {
+                    detected = isWakeWord(jsonText(recognizer.result, "text"), prefs.strictWake)
+                    partialHits = 0
+                } else {
+                    val partial = jsonText(recognizer.partialResult, "partial")
+                    val quiet = level < maxOf(noise * 2.0, 400.0)
+                    partialHits = if (isWakeWord(partial, prefs.strictWake) && quiet) partialHits + 1 else 0
+                    detected = partialHits >= 3 // "Edith" then ~0.3 s pause
                 }
+                if (!detected && !manual) {
+                    noise = noise * 0.98 + level * 0.02 // track background level
+                    continue
+                }
+                partialHits = 0
+
+                // 3) Question -> answer. The microphone keeps running throughout.
+                handleQuestion(current, FRAME, SAMPLE_RATE, noise, prefs)
+                current.flush() // drop audio captured while EDITH was thinking/speaking
+                recognizer.reset()
+                if (running.get()) setStatus(listening)
             }
         } catch (e: InterruptedException) {
             // stopping
@@ -179,27 +203,89 @@ class EdithService : Service() {
             Log.e(TAG, "Listener crashed", e)
             fail("EDITH stopped: ${e.message ?: e.javaClass.simpleName}")
         } finally {
-            recorder?.run { runCatching { stop() }; release() }
+            mic?.close()
             recognizer?.close()
             model.close()
             routing.release()
         }
     }
 
-    /** Vosk result JSON -> did the user say the wake word? */
-    private fun isWakeWord(resultJson: String, strict: Boolean): Boolean {
-        val words = runCatching { JSONObject(resultJson).optString("text") }.getOrDefault("")
-            .split(' ').filter { it.isNotBlank() }
+    /** Microphone wrapper that notices when Android stops delivering audio. */
+    private class Mic(val recorder: AudioRecord, val name: String) {
+        private var errors = 0
+        private var silentFrames = 0
+        var needsReopen = false
+            private set
+
+        fun read(buf: ShortArray): Boolean {
+            var off = 0
+            while (off < buf.size) {
+                val n = recorder.read(buf, off, buf.size - off)
+                if (n <= 0) {
+                    // ERROR_DEAD_OBJECT etc.: happens when Bluetooth/audio routing changes.
+                    if (++errors >= 5 || n == AudioRecord.ERROR_DEAD_OBJECT) needsReopen = true
+                    return false
+                }
+                off += n
+            }
+            errors = 0
+            // Android feeds exact zeros when it silences a background microphone.
+            silentFrames = if (buf.all { it.toInt() == 0 }) silentFrames + 1 else 0
+            if (silentFrames >= 50) { // 5 s of digital silence
+                needsReopen = true
+                return false
+            }
+            return true
+        }
+
+        fun flush() {
+            val tmp = ShortArray(4096)
+            repeat(200) {
+                if (recorder.read(tmp, 0, tmp.size, AudioRecord.READ_NON_BLOCKING) <= 0) return
+            }
+        }
+
+        fun close() {
+            runCatching { recorder.stop() }
+            recorder.release()
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openMic(prefs: Prefs): Mic? {
+        routing.release()
+        val headsetInput = if (prefs.micSource == "headset") routing.useHeadsetMic() else null
+        val source = if (headsetInput != null) MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        else MediaRecorder.AudioSource.VOICE_RECOGNITION
+        val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val recorder = AudioRecord(source, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+            maxOf(minBuf, FRAME * 2 * 8))
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder.release()
+            fail("Could not open the microphone. Is another app using it?")
+            return null
+        }
+        headsetInput?.let { recorder.preferredDevice = it }
+        recorder.startRecording()
+        return Mic(recorder, if (headsetInput != null) "headphone mic" else "phone mic")
+    }
+
+    private fun jsonText(json: String, key: String): String =
+        runCatching { JSONObject(json).optString(key) }.getOrDefault("")
+
+    /** Recognised text -> did the user say the wake word? */
+    private fun isWakeWord(text: String, strict: Boolean): Boolean {
+        val words = text.split(' ').filter { it.isNotBlank() }
         if (words.isEmpty()) return false
         return if (strict) words == listOf("edith") || words == listOf("hey", "edith")
         else "edith" in words
     }
 
-    private fun handleQuestion(recorder: AudioRecord, frame: Int, rate: Int, noise: Double, prefs: Prefs) {
+    private fun handleQuestion(mic: Mic, frame: Int, rate: Int, noise: Double, prefs: Prefs) {
         beep()
+        mic.flush() // don't record the beep
         setStatus("Listening to your question…")
-        val wav = recordQuestion(recorder, frame, rate, noise)
-        recorder.stop()
+        val wav = recordQuestion(mic, frame, rate, noise)
         if (wav == null) {
             speak("I didn't hear a question.")
             return
@@ -228,7 +314,7 @@ class EdithService : Service() {
     }
 
     /** Records until the speaker pauses. Returns WAV bytes, or null if nobody spoke. */
-    private fun recordQuestion(recorder: AudioRecord, frame: Int, rate: Int, noise: Double): ByteArray? {
+    private fun recordQuestion(mic: Mic, frame: Int, rate: Int, noise: Double): ByteArray? {
         val pcm = ByteArrayOutputStream()
         val buf = ShortArray(frame)
         val framesPerSec = rate / frame
@@ -239,8 +325,12 @@ class EdithService : Service() {
         val waitForSpeech = framesPerSec * 6     // up to 6 s to start talking
         val endSilence = (framesPerSec * 1.3).toInt() // stop after 1.3 s of quiet
         val maxFrames = framesPerSec * 20        // max 20 s question
+        var failures = 0
         while (running.get() && total < maxFrames) {
-            if (!readFully(recorder, buf)) continue
+            if (!mic.read(buf)) {
+                if (mic.needsReopen || ++failures > 20) break // microphone broke: give up on this question
+                continue
+            }
             total++
             val loud = rms(buf) > threshold
             if (loud) {
@@ -257,16 +347,6 @@ class EdithService : Service() {
     }
 
     // ------------------------------------------------------------------ helpers
-
-    private fun readFully(r: AudioRecord, buf: ShortArray): Boolean {
-        var off = 0
-        while (off < buf.size) {
-            val n = r.read(buf, off, buf.size - off)
-            if (n <= 0) return false
-            off += n
-        }
-        return true
-    }
 
     private fun rms(buf: ShortArray): Double {
         var sum = 0.0

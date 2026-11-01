@@ -29,6 +29,12 @@
             android:textColor="@color/accent_light"
             android:textSize="16sp" />
 
+        <TextView
+            android:id="@+id/micLevel"
+            style="@style/Hint"
+            android:fontFamily="monospace"
+            android:visibility="gone" />
+
         <Button
             android:id="@+id/toggle"
             style="@style/BigButton"

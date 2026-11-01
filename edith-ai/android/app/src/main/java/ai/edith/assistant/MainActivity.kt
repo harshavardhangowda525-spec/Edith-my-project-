@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var toggle: Button
     private lateinit var lastQa: TextView
+    private lateinit var micLevel: TextView
     private val stateListener: () -> Unit = { render() }
 
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
@@ -51,6 +52,7 @@ class MainActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         toggle = findViewById(R.id.toggle)
         lastQa = findViewById(R.id.lastQa)
+        micLevel = findViewById(R.id.micLevel)
 
         bindText(R.id.serverUrl, prefs.serverUrl) { prefs.serverUrl = it }
         bindText(R.id.password, prefs.password) { prefs.password = it }
@@ -90,6 +92,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun render() {
         status.text = EdithState.status
+        if (EdithState.running) {
+            // 0-10 bars on a log scale: lets you see whether EDITH hears anything at all.
+            val bars = (kotlin.math.ln(EdithState.micLevel + 1) / kotlin.math.ln(4000.0) * 10).toInt().coerceIn(0, 10)
+            micLevel.text = "Mic  " + "▮".repeat(bars) + "▯".repeat(10 - bars)
+            micLevel.visibility = View.VISIBLE
+        } else {
+            micLevel.visibility = View.GONE
+        }
         toggle.text = if (EdithState.running) "Stop EDITH" else "Start listening for “Edith”"
         lastQa.text = buildString {
             if (EdithState.lastQuestion.isNotBlank()) append("You: ${EdithState.lastQuestion}\n")

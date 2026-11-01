@@ -130,7 +130,7 @@ Useful settings (⚙):
 | "Cannot reach the EDITH server" | The free plan is waking up. Wait 60 seconds and try again |
 | Yellow "Mock mode" banner | `AI_PROVIDER` / `AI_API_KEY` are missing in Render → Environment |
 | "AI provider rejected the API key" | Wrong key, or no billing credit with the AI provider |
-| "OWNER_USER_ID must be the UUID…" | Paste the User UID from Supabase step A4 |
+| "OWNER_USER_ID must be the User UID…" | In Supabase → Authentication → Users, click your user and copy the **User UID** (36 characters like `3f2a9c1e-1234-4abc-9def-0123456789ab`), not your email or the project ID. The message tells you how many characters the server received |
 | "Database error" | Check `SUPABASE_URL` / key, and that `schema.sql` ran successfully |
 | Microphone blocked | Tap the lock icon in the address bar → Permissions → Microphone → Allow |
 | Sound plays from the phone speaker | Reconnect the headphones, then reload EDITH |

@@ -5,6 +5,7 @@ Nothing secret is ever hard-coded or returned to clients.
 """
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -28,6 +29,9 @@ OPENAI_COMPATIBLE_PRESETS: dict[str, tuple[str, str, bool]] = {
     "ollama": ("http://localhost:11434/v1", "llama3.1", False),
     "lmstudio": ("http://localhost:1234/v1", "local-model", False),
 }
+_UUID_RE = re.compile(r"[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}")
+_PASTE_JUNK = " \t\r\n\"'`<>"
+
 ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
 SUPPORTED_AI_PROVIDERS = ["openai", "anthropic", "mock", *OPENAI_COMPATIBLE_PRESETS]
@@ -99,6 +103,28 @@ class Settings(BaseSettings):
     @classmethod
     def _norm_provider(cls, v: str) -> str:
         return (v or "mock").strip().lower().replace("-", "").replace(" ", "") or "mock"
+
+    @field_validator("owner_access_token", "supabase_url", "supabase_service_role_key",
+                     "supabase_jwt_secret", mode="before")
+    @classmethod
+    def _strip_pasted(cls, v: object) -> object:
+        """Values pasted into hosting dashboards often carry spaces, newlines or quotes."""
+        if isinstance(v, str):
+            v = v.strip(_PASTE_JUNK)
+            return v or None
+        return v
+
+    @field_validator("owner_user_id", mode="before")
+    @classmethod
+    def _extract_uuid(cls, v: object) -> object:
+        """Accept 'UID: <uuid>', quoted, upper-case or whitespace-padded pastes."""
+        if isinstance(v, str):
+            m = _UUID_RE.search(v)
+            if m:
+                h = m.group(0).replace("-", "").lower()
+                return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
+            return v.strip(_PASTE_JUNK) or "00000000-0000-0000-0000-000000000001"
+        return v
 
     @model_validator(mode="after")
     def _fill_provider_defaults(self) -> "Settings":

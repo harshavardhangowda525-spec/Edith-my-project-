@@ -89,7 +89,10 @@ def personal_mode_problem(settings: Settings) -> str | None:
         try:
             uuid.UUID(settings.owner_user_id)
         except ValueError:
-            return "OWNER_USER_ID must be the UUID of your user in Supabase (Authentication -> Users)"
+            got = settings.owner_user_id
+            return ("OWNER_USER_ID must be the User UID from Supabase (Authentication -> Users), "
+                    "like 3f2a9c1e-1234-4abc-9def-0123456789ab (36 characters). "
+                    f"The server received {len(got)} characters starting with '{got[:4]}'.")
     return None
 
 

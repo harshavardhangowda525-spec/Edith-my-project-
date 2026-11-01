@@ -60,4 +60,8 @@ class MemoryService:
     def for_prompt(self, user_id: str) -> list[str]:
         if not self.is_enabled(user_id):
             return []
-        return [m.content for m in self.store.list_memories(user_id)[:MAX_MEMORIES_IN_PROMPT]]
+        items = self.store.list_memories(user_id)
+        # "About me" (category profile) always comes first and is never pushed out by newer memories.
+        profile = [f"About the user: {m.content}" for m in items if m.category == "profile"]
+        others = [m.content for m in items if m.category != "profile"]
+        return profile[:10] + others[: max(0, MAX_MEMORIES_IN_PROMPT - min(len(profile), 10))]

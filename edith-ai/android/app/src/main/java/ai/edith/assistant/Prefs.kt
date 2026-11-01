@@ -48,6 +48,23 @@ class Prefs(context: Context) {
         get() = p.getString("country_code", "") ?: ""
         set(v) = p.edit().putString("country_code", v.filter { it.isDigit() }.take(4)).apply()
 
+    /** Registered headphones ("address|name" per entry). */
+    var trustedHeadphones: List<Headphones.Device>
+        get() = (p.getStringSet("trusted_headphones", emptySet()) ?: emptySet()).map { Headphones.Device.decode(it) }
+        set(v) = p.edit().putStringSet("trusted_headphones", v.map { it.encode() }.toSet()).apply()
+
+    /** Only listen while registered headphones are connected (when any are registered). */
+    var headphoneLock: Boolean
+        get() = p.getBoolean("headphone_lock", true)
+        set(v) = p.edit().putBoolean("headphone_lock", v).apply()
+
+    val headphoneLockActive: Boolean get() = headphoneLock && trustedHeadphones.isNotEmpty()
+
+    /** "About me" text, also saved on the server as profile memories. */
+    var aboutMe: String
+        get() = p.getString("about_me", "") ?: ""
+        set(v) = p.edit().putString("about_me", v).apply()
+
     /** What is missing before EDITH can listen, or null when ready. */
     fun missing(): String? = when {
         serverUrl.isBlank() -> "Enter your EDITH server address."

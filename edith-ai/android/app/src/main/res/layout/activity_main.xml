@@ -61,6 +61,28 @@
             android:layout_marginTop="8dp"
             android:textIsSelectable="true" />
 
+        <!-- ===== Headphones ===== -->
+        <TextView style="@style/Section" android:text="My headphones" />
+
+        <TextView
+            android:id="@+id/headphoneStatus"
+            style="@style/Hint"
+            android:textColor="@color/accent_light" />
+
+        <Button
+            android:id="@+id/registerHeadphones"
+            style="@style/SmallButton"
+            android:text="Register my headphones" />
+
+        <CheckBox
+            android:id="@+id/headphoneLock"
+            style="@style/Radio"
+            android:text="Only work when my registered headphones are connected" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="EDITH pauses (microphone off) whenever your headphones are not connected, and resumes by itself when they are. To use other headphones, pair them with the phone, then register them here." />
+
         <!-- ===== Server ===== -->
         <TextView style="@style/Section" android:text="1 · Your EDITH server" />
 
@@ -202,6 +224,27 @@
             <RadioButton android:id="@+id/musicYtMusic" style="@style/Radio" android:text="YouTube Music" />
             <RadioButton android:id="@+id/musicJioSaavn" style="@style/Radio" android:text="JioSaavn" />
         </RadioGroup>
+
+        <!-- ===== About me ===== -->
+        <TextView style="@style/Section" android:text="5 · About me" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="Tell EDITH who you are. It remembers this and uses it in every answer, email and meeting reply. One fact per line." />
+
+        <EditText
+            android:id="@+id/aboutMe"
+            style="@style/Input"
+            android:gravity="top"
+            android:hint="My name is Harsha.\nI run a web design agency in Bangalore.\nI build websites for small businesses.\nMy email signature: Harsha, Founder"
+            android:inputType="textMultiLine|textCapSentences"
+            android:minLines="4"
+            android:singleLine="false" />
+
+        <Button
+            android:id="@+id/saveAboutMe"
+            style="@style/SmallButton"
+            android:text="Save “About me”" />
 
         <Button
             android:id="@+id/battery"

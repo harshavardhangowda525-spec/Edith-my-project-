@@ -111,6 +111,22 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         request("POST", "/api/email/send", payload.toString().toByteArray(), "application/json")
     }
 
+    /**
+     * Replaces the "About me" profile on the server: one memory (category "profile") per line.
+     * Profile memories are always included in EDITH's answers.
+     */
+    fun saveProfile(text: String) {
+        val existing = JSONArray(request("GET", "/api/memory"))
+        for (i in 0 until existing.length()) {
+            val m = existing.getJSONObject(i)
+            if (m.optString("category") == "profile") request("DELETE", "/api/memory/" + m.getString("id"))
+        }
+        text.lines().map { it.trim() }.filter { it.isNotEmpty() }.flatMap { it.chunked(900) }.take(10).forEach {
+            val body = JSONObject().put("content", it).put("category", "profile")
+            request("POST", "/api/memory", body.toString().toByteArray(), "application/json")
+        }
+    }
+
     data class MeetingHelp(val question: String?, val answer: String?)
 
     /** Live meeting help. Returns answer = null when there is nothing worth answering. */

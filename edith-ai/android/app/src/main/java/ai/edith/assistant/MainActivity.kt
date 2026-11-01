@@ -41,6 +41,10 @@ class MainActivity : AppCompatActivity() {
         if (it.values.any { granted -> !granted }) toast("Without these permissions EDITH can't call your contacts.")
     }
 
+    private val askBluetooth = registerForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
+        if (ok) showHeadphonePicker() else toast("EDITH needs the Nearby devices permission to see your headphones.")
+    }
+
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         if (res[Manifest.permission.RECORD_AUDIO] == true) startEdith()
         else { EdithState.meetingMode = false; toast("EDITH needs microphone permission to hear “Edith”.") }
@@ -90,6 +94,17 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.READ_PHONE_STATE))
         }
         findViewById<Button>(R.id.testCall).setOnClickListener { testCall() }
+        findViewById<Button>(R.id.registerHeadphones).setOnClickListener {
+            if (Build.VERSION.SDK_INT >= 31 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
+            ) askBluetooth.launch(Manifest.permission.BLUETOOTH_CONNECT) else showHeadphonePicker()
+        }
+        findViewById<CheckBox>(R.id.headphoneLock).apply {
+            isChecked = prefs.headphoneLock
+            setOnCheckedChangeListener { _, v -> prefs.headphoneLock = v; render() }
+        }
+        findViewById<EditText>(R.id.aboutMe).setText(prefs.aboutMe)
+        findViewById<Button>(R.id.saveAboutMe).setOnClickListener { saveAboutMe() }
         findViewById<Button>(R.id.allowApps).setOnClickListener {
             if (Settings.canDrawOverlays(this)) toast("Already allowed ✓")
             else startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -163,6 +178,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun render() {
         status.text = EdithState.status
+        val trusted = prefs.trustedHeadphones
+        val now = Headphones.trustedConnected(this, trusted)
+        findViewById<TextView>(R.id.headphoneStatus).text = when {
+            trusted.isEmpty() -> "No headphones registered: EDITH works with any headphones (or none)."
+            !prefs.headphoneLock -> "Registered: ${trusted.joinToString { it.name }} (lock is off)"
+            now != null -> "Locked to: ${trusted.joinToString { it.name }}. ${now.name} connected ✓"
+            else -> "Locked to: ${trusted.joinToString { it.name }}. Not connected: EDITH is paused."
+        }
         val calls = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE,
             Manifest.permission.READ_PHONE_STATE)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
@@ -195,6 +218,49 @@ class MainActivity : AppCompatActivity() {
             (EdithState.meetingMode || EdithState.status.startsWith("Conversation"))
         heard.text = if (showHeard) "Heard: ${EdithState.lastHeard}" else ""
         heard.visibility = if (showHeard) View.VISIBLE else View.GONE
+    }
+
+    /** Pick which paired Bluetooth headphones EDITH may work with. */
+    private fun showHeadphonePicker() {
+        val connected = Headphones.connected(this)
+        val all = (connected + Headphones.paired(this))
+            .filter { it.name.isNotBlank() || it.address.isNotBlank() }
+            .distinctBy { it.address.uppercase().ifBlank { it.name } }
+        if (all.isEmpty()) {
+            toast("No Bluetooth headphones found. Pair and connect them in Android's Bluetooth settings first.")
+            return
+        }
+        val trusted = prefs.trustedHeadphones
+        val labels = all.map { d ->
+            d.name.ifBlank { d.address } + if (connected.any { Headphones.same(it, d) }) "  (connected)" else ""
+        }.toTypedArray()
+        val checked = all.map { d -> trusted.any { Headphones.same(it, d) } }.toBooleanArray()
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Which headphones can use EDITH?")
+            .setMultiChoiceItems(labels, checked) { _, i, on -> checked[i] = on }
+            .setPositiveButton("Save") { _, _ ->
+                prefs.trustedHeadphones = all.filterIndexed { i, _ -> checked[i] }
+                toast(if (prefs.trustedHeadphones.isEmpty()) "No headphones registered: EDITH works with any audio."
+                      else "Saved. EDITH now works only with these headphones.")
+                render()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun saveAboutMe() {
+        val text = findViewById<EditText>(R.id.aboutMe).text.toString().trim()
+        prefs.aboutMe = text
+        prefs.missing()?.let { toast("Saved on this phone. $it"); return }
+        thread {
+            val msg = try {
+                EdithApi(prefs.serverUrl, prefs.password).saveProfile(text)
+                if (text.isBlank()) "About me cleared." else "Saved. EDITH will remember this."
+            } catch (e: EdithException) {
+                "Saved on this phone, but not on the server: ${e.message}"
+            }
+            runOnUiThread { toast(msg) }
+        }
     }
 
     /** Calls a contact without voice or server, and reports every step (for troubleshooting). */
@@ -292,7 +358,7 @@ class MainActivity : AppCompatActivity() {
         prefs.missing()?.let { toast(it); return }
         val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= 33) needed += Manifest.permission.POST_NOTIFICATIONS
-        if (Build.VERSION.SDK_INT >= 31 && prefs.micSource == "headset" && !EdithState.meetingMode) {
+        if (Build.VERSION.SDK_INT >= 31 && ((prefs.micSource == "headset" && !EdithState.meetingMode) || prefs.headphoneLockActive)) {
             needed += Manifest.permission.BLUETOOTH_CONNECT
         }
         val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }

@@ -161,6 +161,36 @@ agreements, so tell participants you use an AI assistant (e.g. "I use an AI note
 * Busy rooms, distant speakers or people talking over each other lower accuracy.
 * For video calls (Zoom/Meet on a laptop), the phone must be able to hear the laptop's speaker.
 
+## My headphones: EDITH only works with yours
+
+At the top of the app, **My headphones**:
+1. Pair and connect your headphones in Android's Bluetooth settings as usual.
+2. Tap **Register my headphones**, allow *Nearby devices*, tick your headphones, then **Save**.
+3. Keep **Only work when my registered headphones are connected** on.
+
+Now EDITH **pauses with the microphone off** whenever those headphones aren't connected (status:
+*"Waiting for your headphones"*), and when they reconnect it says **"EDITH ready."** and listens
+again. To use different headphones, pair them in Android, then register them here (you can tick
+several). With no headphones registered, EDITH works with any audio, as before.
+
+> This stops EDITH answering through other headphones. It isn't strong security, because
+> Bluetooth names and addresses can be imitated. Your EDITH password still protects your server.
+
+## About me
+
+Section **5 · About me**: write who you are, one fact per line, e.g.
+
+```
+My name is Harsha.
+I run a web design agency in Bangalore.
+I build websites and apps for small businesses.
+Sign my emails as: Harsha, Founder
+```
+
+Tap **Save "About me"**. EDITH stores it as your profile on your server and uses it in every answer,
+email draft and Meeting-mode reply ("What do you do?" → it knows). Edit and save again any time.
+(It needs *Persistent memory* on in the website's Privacy settings, which is on by default.)
+
 ## Microphone choice
 
 | Setting | Good | Trade-off |

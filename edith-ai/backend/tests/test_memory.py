@@ -84,3 +84,13 @@ def test_chunking() -> None:
     assert all(len(c) <= 900 for c in chunks)
     assert chunk_text("short") == ["short"]
     assert chunk_text("   ") == []
+
+
+def test_profile_memories_always_first(client: TestClient) -> None:
+    client.post("/api/memory", headers=auth(), json={"content": "I'm Harsha, founder of a web agency", "category": "profile"})
+    for i in range(20):
+        client.post("/api/memory", headers=auth(), json={"content": f"fact {i}"})
+    svc = client.app.state.memory
+    lines = svc.for_prompt(ALICE_ID)
+    assert lines[0] == "About the user: I'm Harsha, founder of a web agency"
+    assert len(lines) == 15

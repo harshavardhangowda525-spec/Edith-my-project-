@@ -212,6 +212,30 @@ class EdithService : Service() {
             var partialHits = 0
             var frameCount = 0
             while (running.get()) {
+                // 0a) Headphone lock: only listen while the user's registered headphones are connected.
+                if (frameCount % 10 == 0 && headphonesMissing(prefs)) {
+                    current.close()
+                    mic = null
+                    currentMic = null
+                    conversationUntil = 0
+                    meetingWorker.queue.clear()
+                    val names = prefs.trustedHeadphones.joinToString(" or ") { it.name.ifBlank { "your headphones" } }
+                    setStatus("Waiting for your headphones ($names)")
+                    EdithState.log("Paused: registered headphones not connected")
+                    while (running.get() && headphonesMissing(prefs)) Thread.sleep(1000)
+                    if (!running.get()) break
+                    Thread.sleep(1500) // let Bluetooth audio settle
+                    current = openMic(prefs, phoneOnly = meeting) ?: return
+                    mic = current
+                    currentMic = current
+                    recognizer.reset()
+                    seg.reset()
+                    frameCount = 1
+                    setStatus(listening)
+                    EdithState.log("Headphones connected: listening")
+                    speak("EDITH ready.")
+                    continue
+                }
                 // 0) Give the microphone to phone/WhatsApp calls; resume afterwards.
                 if (inPhoneCall() || System.currentTimeMillis() < holdMicUntil) {
                     current.close()
@@ -854,6 +878,10 @@ class EdithService : Service() {
         routing.release()
         Thread.sleep(300)
     }
+
+    /** True when the headphone lock is on and none of the registered headphones is connected. */
+    private fun headphonesMissing(prefs: Prefs): Boolean =
+        prefs.headphoneLockActive && Headphones.trustedConnected(this, prefs.trustedHeadphones) == null
 
     /** True while a phone/VoIP call is active: EDITH must not take the microphone. */
     private fun inPhoneCall(): Boolean {

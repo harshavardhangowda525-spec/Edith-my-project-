@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:letterSpacing="0.35"
+            android:text="EDITH"
+            android:textColor="@color/text"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/status"
+            style="@style/Card"
+            android:layout_marginTop="16dp"
+            android:text="Stopped"
+            android:textColor="@color/accent_light"
+            android:textSize="16sp" />
+
+        <Button
+            android:id="@+id/toggle"
+            style="@style/BigButton"
+            android:text="Start listening for “Edith”" />
+
+        <Button
+            android:id="@+id/askNow"
+            style="@style/SmallButton"
+            android:text="Ask now (without wake word)" />
+
+        <TextView
+            android:id="@+id/lastQa"
+            style="@style/Hint"
+            android:layout_marginTop="8dp"
+            android:textIsSelectable="true" />
+
+        <!-- ===== Server ===== -->
+        <TextView style="@style/Section" android:text="1 · Your EDITH server" />
+
+        <TextView style="@style/Label" android:text="Server address" />
+        <EditText
+            android:id="@+id/serverUrl"
+            style="@style/Input"
+            android:hint="https://edith-ai-xxxx.onrender.com"
+            android:inputType="textUri" />
+
+        <TextView style="@style/Label" android:text="EDITH password (OWNER_ACCESS_TOKEN)" />
+        <EditText
+            android:id="@+id/password"
+            style="@style/Input"
+            android:hint="the password you use on the website"
+            android:inputType="textPassword" />
+
+        <Button
+            android:id="@+id/test"
+            style="@style/SmallButton"
+            android:text="Test connection" />
+
+        <!-- ===== Wake word ===== -->
+        <TextView style="@style/Section" android:text="2 · Wake word (Picovoice)" />
+
+        <TextView style="@style/Label" android:text="Picovoice AccessKey" />
+        <EditText
+            android:id="@+id/picovoiceKey"
+            style="@style/Input"
+            android:hint="from console.picovoice.ai"
+            android:inputType="textPassword" />
+
+        <RadioGroup
+            android:id="@+id/wakeWord"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp">
+            <RadioButton
+                android:id="@+id/wakeCustom"
+                style="@style/Radio"
+                android:text="“Edith” (my trained wake-word file)" />
+            <RadioButton
+                android:id="@+id/wakeJarvis"
+                style="@style/Radio"
+                android:text="“Jarvis” (built-in, for testing)" />
+        </RadioGroup>
+
+        <Button
+            android:id="@+id/chooseFile"
+            style="@style/SmallButton"
+            android:text="Choose “Edith” file (.ppn)" />
+
+        <TextView
+            android:id="@+id/fileStatus"
+            style="@style/Hint" />
+
+        <TextView
+            android:id="@+id/sensitivityLabel"
+            style="@style/Label"
+            android:text="Sensitivity" />
+        <SeekBar
+            android:id="@+id/sensitivity"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="85" />
+        <TextView
+            style="@style/Hint"
+            android:text="Higher = hears “Edith” more easily, but wakes up by mistake more often." />
+
+        <!-- ===== Microphone ===== -->
+        <TextView style="@style/Section" android:text="3 · Microphone" />
+
+        <RadioGroup
+            android:id="@+id/micSource"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <RadioButton
+                android:id="@+id/micHeadset"
+                style="@style/Radio"
+                android:text="Headphone microphone (when connected)" />
+            <RadioButton
+                android:id="@+id/micPhone"
+                style="@style/Radio"
+                android:text="Phone microphone (better music quality and battery)" />
+        </RadioGroup>
+        <TextView
+            style="@style/Hint"
+            android:text="Using the headphone mic keeps Bluetooth in “call mode”: music sounds like a phone call and the headphone battery drains faster." />
+
+        <CheckBox
+            android:id="@+id/mediaButton"
+            style="@style/Radio"
+            android:text="Headphone play/pause button also asks EDITH (may take over music controls)" />
+
+        <Button
+            android:id="@+id/battery"
+            style="@style/SmallButton"
+            android:text="Allow EDITH to run in background (battery settings)" />
+
+        <TextView
+            style="@style/Hint"
+            android:layout_marginTop="16dp"
+            android:text="While EDITH listens, a notification is shown. Sound is analysed on this phone for the wake word; only your question after “Edith” is sent to your server." />
+    </LinearLayout>
+</ScrollView>

@@ -1,0 +1,55 @@
+# Builds the EDITH Android app and publishes the APK as a GitHub Release
+# (download it on your phone from the repository's "Releases" page).
+name: Build EDITH Android app
+
+on:
+  push:
+    paths:
+      - "edith-ai/android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release with the APK
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edith-ai/android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "EDITH-${GITHUB_RUN_NUMBER}.apk"
+
+      - name: Keep the APK as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EDITH-android
+          path: edith-ai/android/EDITH-*.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: edith-android-${{ github.run_number }}
+          name: EDITH Android app (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: edith-ai/android/EDITH-*.apk
+          body: |
+            Install on your Android phone:
+            1. Open this page on the phone and tap the **EDITH-${{ github.run_number }}.apk** file below.
+            2. Allow "Install unknown apps" for your browser when asked, then tap **Install**.
+            Setup guide: edith-ai/docs/ANDROID_APP.md

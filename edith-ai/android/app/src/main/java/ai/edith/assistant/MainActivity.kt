@@ -1,0 +1,208 @@
+package ai.edith.assistant
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.View
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.EditText
+import android.widget.RadioGroup
+import android.widget.SeekBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import kotlin.concurrent.thread
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var prefs: Prefs
+    private lateinit var status: TextView
+    private lateinit var toggle: Button
+    private lateinit var lastQa: TextView
+    private lateinit var fileStatus: TextView
+    private val stateListener: () -> Unit = { render() }
+
+    private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) importKeywordFile(uri)
+    }
+
+    private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        if (res[Manifest.permission.RECORD_AUDIO] == true) startEdith()
+        else toast("EDITH needs microphone permission to hear “Edith”.")
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        prefs = Prefs(this)
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
+
+        status = findViewById(R.id.status)
+        toggle = findViewById(R.id.toggle)
+        lastQa = findViewById(R.id.lastQa)
+        fileStatus = findViewById(R.id.fileStatus)
+
+        bindText(R.id.serverUrl, prefs.serverUrl) { prefs.serverUrl = it }
+        bindText(R.id.password, prefs.password) { prefs.password = it }
+        bindText(R.id.picovoiceKey, prefs.picovoiceKey) { prefs.picovoiceKey = it }
+
+        findViewById<RadioGroup>(R.id.wakeWord).apply {
+            check(if (prefs.wakeWord == "custom") R.id.wakeCustom else R.id.wakeJarvis)
+            setOnCheckedChangeListener { _, id -> prefs.wakeWord = if (id == R.id.wakeCustom) "custom" else "jarvis"; render() }
+        }
+        findViewById<RadioGroup>(R.id.micSource).apply {
+            check(if (prefs.micSource == "headset") R.id.micHeadset else R.id.micPhone)
+            setOnCheckedChangeListener { _, id -> prefs.micSource = if (id == R.id.micHeadset) "headset" else "phone" }
+        }
+        findViewById<CheckBox>(R.id.mediaButton).apply {
+            isChecked = prefs.mediaButton
+            setOnCheckedChangeListener { _, v -> prefs.mediaButton = v }
+        }
+        val sensLabel = findViewById<TextView>(R.id.sensitivityLabel)
+        findViewById<SeekBar>(R.id.sensitivity).apply {
+            progress = ((prefs.sensitivity - 0.1f) * 100).toInt()
+            sensLabel.text = "Sensitivity: ${"%.2f".format(prefs.sensitivity)}"
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
+                    prefs.sensitivity = 0.1f + p / 100f
+                    sensLabel.text = "Sensitivity: ${"%.2f".format(prefs.sensitivity)}"
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+
+        findViewById<Button>(R.id.chooseFile).setOnClickListener { pickFile.launch(arrayOf("*/*")) }
+        findViewById<Button>(R.id.test).setOnClickListener { testConnection() }
+        findViewById<Button>(R.id.battery).setOnClickListener { openBatterySettings() }
+        findViewById<Button>(R.id.askNow).setOnClickListener {
+            if (EdithState.running) startService(Intent(this, EdithService::class.java).setAction(EdithService.ACTION_ASK))
+            else toast("Start EDITH first.")
+        }
+        toggle.setOnClickListener {
+            if (EdithState.running) stopService(Intent(this, EdithService::class.java)) else requestAndStart()
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        EdithState.addListener(stateListener)
+        render()
+    }
+
+    override fun onStop() {
+        EdithState.removeListener(stateListener)
+        super.onStop()
+    }
+
+    private fun render() {
+        status.text = EdithState.status
+        toggle.text = if (EdithState.running) "Stop EDITH" else
+            "Start listening for “${if (prefs.wakeWord == "custom") "Edith" else "Jarvis"}”"
+        lastQa.text = buildString {
+            if (EdithState.lastQuestion.isNotBlank()) append("You: ${EdithState.lastQuestion}\n")
+            if (EdithState.lastAnswer.isNotBlank()) append("EDITH: ${EdithState.lastAnswer}")
+        }
+        lastQa.visibility = if (lastQa.text.isBlank()) View.GONE else View.VISIBLE
+        fileStatus.text = if (prefs.hasKeywordFile) "✓ “Edith” wake-word file installed" else "No “Edith” file chosen yet"
+    }
+
+    private fun requestAndStart() {
+        prefs.missing()?.let { toast(it); return }
+        val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= 33) needed += Manifest.permission.POST_NOTIFICATIONS
+        if (Build.VERSION.SDK_INT >= 31 && prefs.micSource == "headset") needed += Manifest.permission.BLUETOOTH_CONNECT
+        val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) startEdith() else askPermissions.launch(missing.toTypedArray())
+    }
+
+    private fun startEdith() {
+        ContextCompat.startForegroundService(this, Intent(this, EdithService::class.java))
+    }
+
+    private fun testConnection() {
+        if (prefs.serverUrl.isBlank()) { toast("Enter your server address first."); return }
+        status.text = "Testing connection… (can take up to a minute if the server was asleep)"
+        thread {
+            val msg = try {
+                val api = EdithApi(prefs.serverUrl, prefs.password)
+                val h = api.health()
+                api.checkPassword()
+                val speech = h.optString("speech_provider")
+                when {
+                    h.optBoolean("mock_mode") -> "Connected, but the server is in mock mode (no AI key)."
+                    !h.optBoolean("ai_configured") -> "Connected, but the server's AI is not configured."
+                    speech == "none" -> "Connected ✓ but the server can't transcribe speech. Use AI_PROVIDER=groq or openai."
+                    else -> "Connected ✓ AI: ${h.optString("ai_provider")}, speech: $speech"
+                }
+            } catch (e: EdithException) {
+                "⚠ ${e.message}"
+            } catch (e: Exception) {
+                "⚠ Unexpected answer from server. Check the address."
+            }
+            runOnUiThread { status.text = msg }
+        }
+    }
+
+    private fun importKeywordFile(uri: Uri) {
+        try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                prefs.keywordFile.outputStream().use { input.copyTo(it) }
+            }
+            if (prefs.keywordFile.length() < 1000) {
+                prefs.keywordFile.delete()
+                toast("That doesn't look like a wake-word (.ppn) file.")
+            } else {
+                findViewById<RadioGroup>(R.id.wakeWord).check(R.id.wakeCustom)
+                toast("“Edith” wake word installed.")
+            }
+        } catch (e: Exception) {
+            toast("Could not read the file: ${e.message}")
+        }
+        render()
+    }
+
+    @SuppressLint("BatteryLife") // sideloaded personal assistant: needs to run with the screen off
+    private fun openBatterySettings() {
+        val pm = getSystemService(PowerManager::class.java)
+        if (pm.isIgnoringBatteryOptimizations(packageName)) {
+            toast("Already allowed ✓")
+            return
+        }
+        try {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        } catch (e: Exception) {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        }
+    }
+
+    private fun bindText(id: Int, initial: String, save: (String) -> Unit) {
+        findViewById<EditText>(id).apply {
+            setText(initial)
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                override fun afterTextChanged(s: Editable?) = save(s?.toString() ?: "")
+            })
+        }
+    }
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+}

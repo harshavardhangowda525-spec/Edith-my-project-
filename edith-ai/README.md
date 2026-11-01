@@ -15,6 +15,11 @@ your phone from anywhere: **[docs/GO_ONLINE.md](docs/GO_ONLINE.md)** (about 20 m
 It installs to your home screen, unlocks with your personal EDITH password, and has a big
 **Tap to talk** button.
 
+## Say "Edith" (Android app)
+
+Always-on wake word: say **"Edith"** with the screen off and EDITH answers in your headphones.
+Install and setup: **[docs/ANDROID_APP.md](docs/ANDROID_APP.md)**.
+
 ## Quick start (Windows)
 
 One command (checks prerequisites, creates venv and `.env` files, installs, runs tests):

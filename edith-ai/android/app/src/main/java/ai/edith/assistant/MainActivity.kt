@@ -89,6 +89,7 @@ class MainActivity : AppCompatActivity() {
             askCallPermissions.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE,
                 Manifest.permission.READ_PHONE_STATE))
         }
+        findViewById<Button>(R.id.testCall).setOnClickListener { testCall() }
         findViewById<Button>(R.id.allowApps).setOnClickListener {
             if (Settings.canDrawOverlays(this)) toast("Already allowed ✓")
             else startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -179,6 +180,67 @@ class MainActivity : AppCompatActivity() {
             (EdithState.meetingMode || EdithState.status.startsWith("Conversation"))
         heard.text = if (showHeard) "Heard: ${EdithState.lastHeard}" else ""
         heard.visibility = if (showHeard) View.VISIBLE else View.GONE
+    }
+
+    /** Calls a contact without voice or server, and reports every step (for troubleshooting). */
+    private fun testCall() {
+        val input = EditText(this).apply {
+            hint = "Contact name, e.g. Mom"
+            setSingleLine()
+        }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Test call")
+            .setMessage("EDITH will find this contact and call it the same way it does by voice. " +
+                "Then it shows what happened at each step.")
+            .setView(input)
+            .setPositiveButton("Call") { _, _ -> runTestCall(input.text.toString().trim()) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun runTestCall(name: String) {
+        if (name.isBlank()) { toast("Type a contact name."); return }
+        fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
+        val report = StringBuilder()
+        report.append("Phone: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n")
+        report.append("Permissions: contacts=${granted(Manifest.permission.READ_CONTACTS)}, " +
+            "phone=${granted(Manifest.permission.CALL_PHONE)}, phone-state=${granted(Manifest.permission.READ_PHONE_STATE)}, " +
+            "display-over-apps=${Settings.canDrawOverlays(this)}\n")
+        status.text = "Test call: working…"
+        val before = EdithState.actionLog.toList()
+        thread {
+            val actions = PhoneActions(this, prefs)
+            try {
+                val matches = actions.findContacts(name)
+                report.append("Contact search \"$name\": ${matches.size} match(es) ${matches.joinToString { it.name }}\n")
+                when {
+                    matches.isEmpty() -> report.append("→ No contact found. Use the name exactly as saved.\n")
+                    matches.size > 1 -> report.append("→ More than one match. Use the full name.\n")
+                    else -> {
+                        val result = actions.placeCall(matches[0])
+                        report.append("Result: ${result ?: "call started ✓"}\n")
+                    }
+                }
+            } catch (e: Exception) {
+                report.append("CRASH: ${e.javaClass.name}: ${e.message}\n")
+            }
+            val newLines = EdithState.actionLog.toList().filter { it !in before }.reversed()
+            if (newLines.isNotEmpty()) report.append("\nSteps:\n").append(newLines.joinToString("\n"))
+            runOnUiThread {
+                status.text = EdithState.status
+                val text = report.toString()
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("Test call report")
+                    .setMessage(text)
+                    .setPositiveButton("Copy") { _, _ ->
+                        getSystemService(android.content.ClipboardManager::class.java)
+                            .setPrimaryClip(android.content.ClipData.newPlainText("EDITH test call", text))
+                        toast("Copied. Paste it to Claude.")
+                    }
+                    .setNegativeButton("Close", null)
+                    .show()
+            }
+        }
     }
 
     /** Meeting mode listens to the room, so the user confirms participants know first. */

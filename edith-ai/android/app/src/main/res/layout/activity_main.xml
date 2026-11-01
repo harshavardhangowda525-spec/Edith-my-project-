@@ -143,6 +143,11 @@
             android:text="Allow calls (contacts + phone)" />
 
         <Button
+            android:id="@+id/testCall"
+            style="@style/SmallButton"
+            android:text="📞 Test call (shows exactly what fails)" />
+
+        <Button
             android:id="@+id/allowApps"
             style="@style/SmallButton"
             android:text="Allow opening apps &amp; music (display over other apps)" />

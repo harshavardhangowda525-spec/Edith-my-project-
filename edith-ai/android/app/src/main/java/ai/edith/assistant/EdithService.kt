@@ -515,6 +515,10 @@ class EdithService : Service() {
                 }
             } catch (e: EdithException) {
                 EdithState.update(heard = "⚠ ${e.message}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Conversation task failed", e)
+                EdithState.log("Error: ${e.javaClass.simpleName}: ${e.message}")
+                speakWhisper("Something went wrong: ${e.javaClass.simpleName}.")
             } finally {
                 conversationPending.decrementAndGet()
             }
@@ -635,6 +639,11 @@ class EdithService : Service() {
         } catch (e: EdithException) {
             EdithState.update(answer = "⚠ ${e.message}")
             speak(e.message ?: "Something went wrong.")
+        } catch (e: Exception) {
+            Log.e(TAG, "Question failed", e)
+            EdithState.log("Error: ${e.javaClass.simpleName}: ${e.message}")
+            EdithState.update(answer = "⚠ ${e.javaClass.simpleName}: ${e.message}")
+            speak("Something went wrong: ${e.javaClass.simpleName}.")
         }
     }
 

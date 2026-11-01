@@ -140,9 +140,15 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
                 ?: "I opened the dialer. Turn on Allow calls in EDITH so I can call directly."
         }
 
-        // 1) Telecom
+        // 1) Telecom, with a SIM chosen up front: on dual-SIM phones set to "Ask every time" the
+        //    "choose SIM" popup can't appear for a background app, so the call would never start.
         try {
-            ctx.getSystemService(TelecomManager::class.java).placeCall(uri, Bundle())
+            val extras = Bundle()
+            chooseSim()?.let { (handle, label) ->
+                extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
+                EdithState.log("Call $who: using $label")
+            }
+            ctx.getSystemService(TelecomManager::class.java).placeCall(uri, extras)
             if (callStarted()) {
                 EdithState.log("Call $who: started (Telecom)")
                 return null
@@ -168,6 +174,22 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
         // 3) Dialer
         return launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
             ?: "I couldn't start the call by myself, so I opened the dialer with the number. Press call."
+    }
+
+    /** Default calling SIM, or the first SIM when the phone asks every time. Needs READ_PHONE_STATE. */
+    @SuppressLint("MissingPermission")
+    private fun chooseSim(): Pair<android.telecom.PhoneAccountHandle, String>? {
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) {
+            return null
+        }
+        return runCatching {
+            val tm = ctx.getSystemService(TelecomManager::class.java)
+            val default = tm.getDefaultOutgoingPhoneAccount("tel")
+            val accounts = tm.callCapablePhoneAccounts
+            val handle = default ?: accounts.firstOrNull() ?: return null
+            val label = tm.getPhoneAccount(handle)?.label?.toString()?.ifBlank { null } ?: "SIM"
+            handle to (if (default != null) "default SIM ($label)" else "SIM 1 of ${accounts.size} ($label) – phone is set to ask every time")
+        }.onFailure { Log.w(TAG, "SIM choice failed", it) }.getOrNull()
     }
 
     /** Waits up to [timeoutMs] for the phone to enter a call. */

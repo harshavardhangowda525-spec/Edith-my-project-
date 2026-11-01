@@ -16,7 +16,6 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.RadioGroup
-import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,12 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var toggle: Button
     private lateinit var lastQa: TextView
-    private lateinit var fileStatus: TextView
     private val stateListener: () -> Unit = { render() }
-
-    private val pickFile = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) importKeywordFile(uri)
-    }
 
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         if (res[Manifest.permission.RECORD_AUDIO] == true) startEdith()
@@ -57,15 +51,12 @@ class MainActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         toggle = findViewById(R.id.toggle)
         lastQa = findViewById(R.id.lastQa)
-        fileStatus = findViewById(R.id.fileStatus)
 
         bindText(R.id.serverUrl, prefs.serverUrl) { prefs.serverUrl = it }
         bindText(R.id.password, prefs.password) { prefs.password = it }
-        bindText(R.id.picovoiceKey, prefs.picovoiceKey) { prefs.picovoiceKey = it }
-
-        findViewById<RadioGroup>(R.id.wakeWord).apply {
-            check(if (prefs.wakeWord == "custom") R.id.wakeCustom else R.id.wakeJarvis)
-            setOnCheckedChangeListener { _, id -> prefs.wakeWord = if (id == R.id.wakeCustom) "custom" else "jarvis"; render() }
+        findViewById<CheckBox>(R.id.strictWake).apply {
+            isChecked = prefs.strictWake
+            setOnCheckedChangeListener { _, v -> prefs.strictWake = v }
         }
         findViewById<RadioGroup>(R.id.micSource).apply {
             check(if (prefs.micSource == "headset") R.id.micHeadset else R.id.micPhone)
@@ -75,21 +66,6 @@ class MainActivity : AppCompatActivity() {
             isChecked = prefs.mediaButton
             setOnCheckedChangeListener { _, v -> prefs.mediaButton = v }
         }
-        val sensLabel = findViewById<TextView>(R.id.sensitivityLabel)
-        findViewById<SeekBar>(R.id.sensitivity).apply {
-            progress = ((prefs.sensitivity - 0.1f) * 100).toInt()
-            sensLabel.text = "Sensitivity: ${"%.2f".format(prefs.sensitivity)}"
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                    prefs.sensitivity = 0.1f + p / 100f
-                    sensLabel.text = "Sensitivity: ${"%.2f".format(prefs.sensitivity)}"
-                }
-                override fun onStartTrackingTouch(sb: SeekBar?) {}
-                override fun onStopTrackingTouch(sb: SeekBar?) {}
-            })
-        }
-
-        findViewById<Button>(R.id.chooseFile).setOnClickListener { pickFile.launch(arrayOf("*/*")) }
         findViewById<Button>(R.id.test).setOnClickListener { testConnection() }
         findViewById<Button>(R.id.battery).setOnClickListener { openBatterySettings() }
         findViewById<Button>(R.id.askNow).setOnClickListener {
@@ -114,14 +90,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun render() {
         status.text = EdithState.status
-        toggle.text = if (EdithState.running) "Stop EDITH" else
-            "Start listening for “${if (prefs.wakeWord == "custom") "Edith" else "Jarvis"}”"
+        toggle.text = if (EdithState.running) "Stop EDITH" else "Start listening for “Edith”"
         lastQa.text = buildString {
             if (EdithState.lastQuestion.isNotBlank()) append("You: ${EdithState.lastQuestion}\n")
             if (EdithState.lastAnswer.isNotBlank()) append("EDITH: ${EdithState.lastAnswer}")
         }
         lastQa.visibility = if (lastQa.text.isBlank()) View.GONE else View.VISIBLE
-        fileStatus.text = if (prefs.hasKeywordFile) "✓ “Edith” wake-word file installed" else "No “Edith” file chosen yet"
     }
 
     private fun requestAndStart() {
@@ -159,24 +133,6 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread { status.text = msg }
         }
-    }
-
-    private fun importKeywordFile(uri: Uri) {
-        try {
-            contentResolver.openInputStream(uri)?.use { input ->
-                prefs.keywordFile.outputStream().use { input.copyTo(it) }
-            }
-            if (prefs.keywordFile.length() < 1000) {
-                prefs.keywordFile.delete()
-                toast("That doesn't look like a wake-word (.ppn) file.")
-            } else {
-                findViewById<RadioGroup>(R.id.wakeWord).check(R.id.wakeCustom)
-                toast("“Edith” wake word installed.")
-            }
-        } catch (e: Exception) {
-            toast("Could not read the file: ${e.message}")
-        }
-        render()
     }
 
     @SuppressLint("BatteryLife") // sideloaded personal assistant: needs to run with the screen off

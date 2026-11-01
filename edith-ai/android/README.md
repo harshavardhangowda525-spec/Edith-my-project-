@@ -13,11 +13,14 @@ cd edith-ai/android
 ./gradlew assembleRelease     # -> app/build/outputs/apk/release/app-release.apk
 ```
 
+The build downloads the offline Vosk model (`vosk-model-small-en-us-0.15`, ~40 MB, Apache-2.0)
+from alphacephei.com into `app/build/` and packs it into the APK. Nothing large is committed.
+
 ## Code map
 
 | File | Purpose |
 |---|---|
-| `EdithService.kt` | Foreground service (microphone type): Porcupine wake word → voice-activity capture → `/api/voice/transcribe` → `/api/chat` → TextToSpeech |
+| `EdithService.kt` | Foreground service (microphone type): offline Vosk wake word ("edith" + decoy grammar) → voice-activity capture → `/api/voice/transcribe` → `/api/chat` → TextToSpeech |
 | `AudioRouting.kt` | Routes input to a Bluetooth headset mic (SCO / `setCommunicationDevice`) |
 | `EdithApi.kt` | Minimal HTTP client for the EDITH backend |
 | `MainActivity.kt` | Settings screen, permissions, start/stop |

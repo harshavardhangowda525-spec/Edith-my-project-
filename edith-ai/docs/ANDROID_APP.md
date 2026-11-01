@@ -14,19 +14,11 @@ It uses the EDITH server you already set up ([GO_ONLINE.md](GO_ONLINE.md)) with 
 
 ---
 
-## 1. Picovoice: create the "Edith" wake word (5 minutes, free)
+## 1. Nothing to sign up for
 
-1. Go to <https://console.picovoice.ai> and sign up (free account for personal use).
-2. On the dashboard, copy your **AccessKey**. You'll paste it into the app.
-3. Open **Porcupine Wake Word**:
-   * Type the phrase **`Edith`** and click **Train** (you can test it in the browser).
-   * Choose platform **Android** and click **Download**.
-   * You get a `.zip` file. Inside is a file like `Edith_en_android_v4_0_0.ppn`.
-4. Put the `.ppn` file on your phone. Download it directly on the phone and unzip it with the
-   **Files** app (tap the zip → **Extract**), or send it to yourself.
-
-> If EDITH misses "Edith" or wakes up by mistake, train **`Hey Edith`** instead. Longer phrases
-> are more reliable. You can also adjust **Sensitivity** in the app.
+The wake word runs **offline on your phone** with the open-source Vosk speech engine. You don't
+need an account or key, and nothing is sent anywhere until you say "Edith". The speech model is
+built into the app, which is why the download is about 50–60 MB.
 
 ## 2. Make sure your server can understand speech
 
@@ -53,8 +45,6 @@ Updates: install a newer APK the same way. It replaces the old app and keeps you
 |---|---|
 | Server address | your EDITH address, e.g. `https://edith-ai-xxxx.onrender.com` |
 | EDITH password | the same password you use on the website (`OWNER_ACCESS_TOKEN`) |
-| Picovoice AccessKey | from step 1.2 |
-| Wake word | **Choose "Edith" file (.ppn)** → pick the file from step 1.3 |
 
 Then:
 1. Tap **Test connection**. You should see `Connected ✓ AI: groq, speech: groq`.
@@ -66,7 +56,11 @@ Then:
 5. A notification "Listening for "Edith"" appears. Lock the phone and say **"Edith"** → *beep* →
    *"What's the capital of Japan?"*
 
-No `.ppn` file yet? Select **"Jarvis" (built-in, for testing)** to try everything first.
+The first start takes a few seconds while the offline speech model is prepared.
+
+**Wake-word option:** *Only wake when "Edith" is said on its own* (on by default). Say "Edith" or
+"Hey Edith", pause briefly, wait for the beep, then ask. Turn it off to also wake when "Edith"
+appears inside a longer sentence. That's more responsive but wakes by mistake more often.
 
 ## Microphone choice
 
@@ -86,15 +80,16 @@ If the headphones aren't connected, EDITH uses the phone microphone automaticall
 
 ## Privacy
 
-* Wake-word detection runs **on the phone** (Picovoice); audio is not sent anywhere until you say "Edith".
+* Wake-word detection runs **offline on the phone** (Vosk); audio is not sent anywhere until you say "Edith".
 * After the wake word, only your question (until you pause) is sent to **your** server.
 * A notification is always visible while EDITH listens. Android requires this, and it
   means EDITH never listens secretly.
 
 ## Good to know
 
-* **Battery:** always-on listening uses some battery. Picovoice is very efficient, but expect a few
-  percent extra per day, more with the headphone mic.
+* **Battery:** always-on offline listening uses noticeable battery, more than a commercial
+  wake-word chip. Use **Notification → Stop** when you don't need EDITH. The headphone mic adds extra
+  drain on the headphones.
 * **First question after a quiet period** may take up to a minute if your Render server is on the
   free plan and asleep. EDITH says so if it times out.
 * **After restarting the phone**, open the app and tap Start again. Android doesn't allow
@@ -107,11 +102,9 @@ If the headphones aren't connected, EDITH uses the phone microphone automaticall
 
 | Message | Fix |
 |---|---|
-| Picovoice AccessKey was refused | Copy the AccessKey again from console.picovoice.ai |
-| The wake-word file doesn't fit this app | Download the **Android** version of the `.ppn` again |
-| Picovoice device limit reached | Free plans allow a limited number of devices; check your Picovoice console |
+| Could not load the wake-word model | Free some phone storage (it needs ~80 MB once) and start again, or reinstall |
 | Wrong EDITH password | Use the same password as the website (Render → Environment → `OWNER_ACCESS_TOKEN`) |
 | Server can't transcribe speech | Server needs `AI_PROVIDER=groq` or `openai`; redeploy the latest code |
 | I didn't hear a question | Start speaking within about 6 seconds of the beep |
-| Doesn't react to "Edith" | Raise Sensitivity, speak a bit louder, or train "Hey Edith" |
-| Wakes up by itself | Lower Sensitivity |
+| Doesn't react to "Edith" | Say it clearly and pause a moment; try "Hey Edith"; or turn off *Only wake when "Edith" is said on its own* |
+| Wakes up by itself | Turn *Only wake when "Edith" is said on its own* back on; use the phone mic in noisy places |

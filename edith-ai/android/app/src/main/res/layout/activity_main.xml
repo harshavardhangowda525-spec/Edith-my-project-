@@ -68,51 +68,16 @@
             android:text="Test connection" />
 
         <!-- ===== Wake word ===== -->
-        <TextView style="@style/Section" android:text="2 · Wake word (Picovoice)" />
+        <TextView style="@style/Section" android:text="2 · Wake word" />
 
-        <TextView style="@style/Label" android:text="Picovoice AccessKey" />
-        <EditText
-            android:id="@+id/picovoiceKey"
-            style="@style/Input"
-            android:hint="from console.picovoice.ai"
-            android:inputType="textPassword" />
-
-        <RadioGroup
-            android:id="@+id/wakeWord"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp">
-            <RadioButton
-                android:id="@+id/wakeCustom"
-                style="@style/Radio"
-                android:text="“Edith” (my trained wake-word file)" />
-            <RadioButton
-                android:id="@+id/wakeJarvis"
-                style="@style/Radio"
-                android:text="“Jarvis” (built-in, for testing)" />
-        </RadioGroup>
-
-        <Button
-            android:id="@+id/chooseFile"
-            style="@style/SmallButton"
-            android:text="Choose “Edith” file (.ppn)" />
-
-        <TextView
-            android:id="@+id/fileStatus"
-            style="@style/Hint" />
-
-        <TextView
-            android:id="@+id/sensitivityLabel"
-            style="@style/Label"
-            android:text="Sensitivity" />
-        <SeekBar
-            android:id="@+id/sensitivity"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:max="85" />
         <TextView
             style="@style/Hint"
-            android:text="Higher = hears “Edith” more easily, but wakes up by mistake more often." />
+            android:text="Say “Edith” or “Hey Edith”, wait for the beep, then ask. Wake-word detection runs offline on this phone: no account, nothing sent until you say it." />
+
+        <CheckBox
+            android:id="@+id/strictWake"
+            style="@style/Radio"
+            android:text="Only wake when “Edith” is said on its own (recommended: fewer false wake-ups)" />
 
         <!-- ===== Microphone ===== -->
         <TextView style="@style/Section" android:text="3 · Microphone" />
@@ -147,6 +112,6 @@
         <TextView
             style="@style/Hint"
             android:layout_marginTop="16dp"
-            android:text="While EDITH listens, a notification is shown. Sound is analysed on this phone for the wake word; only your question after “Edith” is sent to your server." />
+            android:text="While EDITH listens, a notification is shown. Sound is analysed on this phone for the wake word; only your question after “Edith” is sent to your server. First start takes a few seconds to prepare the offline speech model." />
     </LinearLayout>
 </ScrollView>

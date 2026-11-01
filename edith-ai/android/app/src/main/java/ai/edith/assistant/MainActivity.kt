@@ -68,6 +68,10 @@ class MainActivity : AppCompatActivity() {
 
         bindText(R.id.serverUrl, prefs.serverUrl) { prefs.serverUrl = it }
         bindText(R.id.password, prefs.password) { prefs.password = it }
+        findViewById<CheckBox>(R.id.conversationMode).apply {
+            isChecked = prefs.conversationMode
+            setOnCheckedChangeListener { _, v -> prefs.conversationMode = v }
+        }
         findViewById<CheckBox>(R.id.strictWake).apply {
             isChecked = prefs.strictWake
             setOnCheckedChangeListener { _, v -> prefs.strictWake = v }
@@ -143,7 +147,8 @@ class MainActivity : AppCompatActivity() {
         }
         lastQa.visibility = if (lastQa.text.isBlank()) View.GONE else View.VISIBLE
         meetingToggle.text = if (EdithState.meetingMode) "End Meeting mode" else "Start Meeting mode"
-        val showHeard = EdithState.meetingMode && EdithState.lastHeard.isNotBlank()
+        val showHeard = EdithState.running && EdithState.lastHeard.isNotBlank() &&
+            (EdithState.meetingMode || EdithState.status.startsWith("Conversation"))
         heard.text = if (showHeard) "Heard: ${EdithState.lastHeard}" else ""
         heard.visibility = if (showHeard) View.VISIBLE else View.GONE
     }

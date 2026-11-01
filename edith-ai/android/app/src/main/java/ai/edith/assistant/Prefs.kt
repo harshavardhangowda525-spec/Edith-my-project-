@@ -28,6 +28,11 @@ class Prefs(context: Context) {
         get() = p.getBoolean("media_button", false)
         set(v) = p.edit().putBoolean("media_button", v).apply()
 
+    /** After "Edith", keep listening for follow-up questions (ignores side conversations). */
+    var conversationMode: Boolean
+        get() = p.getBoolean("conversation_mode", true)
+        set(v) = p.edit().putBoolean("conversation_mode", v).apply()
+
     /** What "play my favourite music" plays, e.g. "Liked Songs", "Arijit Singh" (blank = app's pick). */
     var favoriteMusic: String
         get() = p.getString("favorite_music", "") ?: ""

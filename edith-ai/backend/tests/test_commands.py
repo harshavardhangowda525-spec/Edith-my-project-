@@ -143,3 +143,65 @@ def test_assistant_endpoint_ignores_malicious_ai_json():
 def test_assistant_requires_auth():
     c, _ = _client([])
     assert c.post("/api/assistant", json={"message": "call mom"}).status_code == 401
+
+
+# --- conversation mode ------------------------------------------------------------
+
+from app.services.command_service import followup_kind  # noqa: E402
+
+
+@pytest.mark.parametrize("said, kind", [
+    ("Stop listening.", "end"), ("That's all", "end"), ("Thanks Edith!", "end"), ("okay thank you", "end"),
+    ("Bye Edith", "end"), ("never mind", "end"), ("Edith, stop", "end"),
+    ("Yeah.", "ignore"), ("Hmm", "ignore"), ("okay", "ignore"), ("Lunch?", "ignore"), ("", "ignore"),
+    ("Edith?", "wake"), ("Hey Edith.", "wake"),
+    ("What's the time in London?", None), ("Let's get lunch at one", None), ("Edith what is Docker", None),
+])
+def test_followup_quick_kinds(said, kind):
+    assert followup_kind(said) == kind
+
+
+def _fu(c, msg):
+    return c.post("/api/assistant", headers=auth(), json={"message": msg, "followup": True}).json()
+
+
+def test_followup_side_conversation_ignored():
+    c, p = _client(["NOT_FOR_ME"])
+    r = _fu(c, "Let's get lunch at one after the call")
+    assert r["kind"] == "ignore"
+    assert len(p.calls) == 1 and "NOT_FOR_ME" in p.calls[0]  # no command guessing, one AI call
+
+
+def test_followup_overheard_remark_never_becomes_ai_guessed_call():
+    c, p = _client(["NOT_FOR_ME"])
+    r = _fu(c, "we should ring up mom later today")
+    assert r["kind"] == "ignore"
+    assert len(p.calls) == 1 and "phone assistant" not in p.calls[0]  # never sent to the command classifier
+
+
+def test_followup_question_answered():
+    c, p = _client(["Docker packages apps into containers."])
+    r = _fu(c, "And what is Docker used for?")
+    assert r["kind"] == "answer" and r["reply"].startswith("Docker")
+
+
+def test_followup_with_wake_word_is_always_for_edith():
+    c, p = _client(["It's 9 PM in London."])
+    r = _fu(c, "Edith, what's the time in London?")
+    assert r["kind"] == "answer"
+    assert "NOT_FOR_ME" not in p.calls[0] and "edith" not in p.calls[0].lower().split("london")[0]
+
+
+def test_followup_command_and_end_and_filler_skip_ai():
+    c, p = _client([])
+    assert _fu(c, "Set a timer for 5 minutes")["action"] == {"type": "timer", "seconds": 300}
+    assert _fu(c, "That's all, thanks")["kind"] == "end"
+    assert _fu(c, "yeah")["kind"] == "ignore"
+    assert _fu(c, "Edith")["reply"] == "Yes?"
+    assert p.calls == []
+
+
+def test_non_followup_unchanged():
+    c, p = _client(["Answer."])
+    r = c.post("/api/assistant", headers=auth(), json={"message": "Let's get lunch"}).json()
+    assert r["kind"] == "answer" and "NOT_FOR_ME" not in p.calls[0]

@@ -91,6 +91,11 @@
             android:text="Say “Edith” or “Hey Edith”, wait for the beep, then ask. Wake-word detection runs offline on this phone: no account, nothing sent until you say it." />
 
         <CheckBox
+            android:id="@+id/conversationMode"
+            style="@style/Radio"
+            android:text="Keep listening after “Edith” for follow-up questions and tasks (Conversation mode). Side conversations are ignored; ends after 2 minutes without a question, or say “stop listening”." />
+
+        <CheckBox
             android:id="@+id/strictWake"
             style="@style/Radio"
             android:text="Only wake when “Edith” is said on its own (recommended: fewer false wake-ups)" />

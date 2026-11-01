@@ -232,12 +232,16 @@ def _extract_json(text: str) -> Any:
         return None
 
 
-async def understand(text: str, ai: AIService) -> dict[str, Any] | None:
-    """Return a validated action, or None when the sentence is a normal question."""
+async def understand(text: str, ai: AIService, allow_ai: bool = True) -> dict[str, Any] | None:
+    """Return a validated action, or None when the sentence is a normal question.
+
+    allow_ai=False (sentences overheard in conversation mode without "Edith") only accepts the exact
+    command patterns, so a remark like "let's call mom later" is never turned into an action by guessing.
+    """
     action = parse_command(text)
     if action:
         return validate_action(action)
-    if not COMMAND_HINTS.search(normalise(text)):
+    if not allow_ai or not COMMAND_HINTS.search(normalise(text)):
         return None
     result = await ai.chat(CLASSIFY_PROMPT.format(text=text.replace('"', "'")[:500]), [], mode="detailed")
     if result.mock:
@@ -268,3 +272,47 @@ def describe(action: dict[str, Any]) -> str:
     if t == "navigate":
         return f"Starting directions to {action['destination']}."
     return "Okay."
+
+
+# --- Conversation mode -------------------------------------------------------------------
+
+_END_PHRASES = re.compile(
+    r"^(?:(?:ok(?:ay)?|alright|thanks|thank you)\s+)?(?:edith\s+)?(?:"
+    r"stop(?: listening)?|that'?s all|that is all|that'?s it|thanks(?: edith)?|thank you(?: edith)?|"
+    r"bye(?: edith)?|goodbye(?: edith)?|go to sleep|sleep|never ?mind|nothing|no thanks|we'?re done|i'?m done|"
+    r"you can stop|stop now|enough)(?:\s+edith)?(?:\s+(?:thanks|thank you)(?:\s+edith)?)?$"
+)
+_FILLER = re.compile(r"^(?:ok(?:ay)?|yeah|yes|no|hmm+|uh+|um+|right|sure|cool|nice|great|wow|oh|ah|haha|lol|mm+|huh)$")
+WAKE = re.compile(r"\b(?:hey\s+)?edith\b[\s,.!?]*", re.I)
+
+
+def addressed_to_edith(text: str) -> bool:
+    return bool(WAKE.search(text))
+
+
+def strip_wake_word(text: str) -> str:
+    return WAKE.sub(" ", text).strip(" ,.!?") .strip()
+
+
+def followup_kind(text: str) -> str | None:
+    """Cheap decisions for conversation mode: 'end', 'ignore', 'wake' (said just 'Edith'), or None."""
+    t = re.sub(r"[.,!?]", "", text.lower()).strip()
+    t = re.sub(r"\s+", " ", t)
+    if not t:
+        return "ignore"
+    if _END_PHRASES.match(t):
+        return "end"
+    if addressed_to_edith(text) and not strip_wake_word(text):
+        return "wake"
+    if not addressed_to_edith(text) and (_FILLER.match(t) or len(t.split()) == 1):
+        return "ignore"
+    return None
+
+
+NOT_FOR_ME = "NOT_FOR_ME"
+FOLLOWUP_NOTE = (
+    "\n\n(Heard in conversation mode: the user may also be talking to other people nearby. "
+    "If this sentence is clearly NOT addressed to you - side conversation with someone else, talking "
+    "on the phone, background speech, reading aloud, or filler - reply with exactly " + NOT_FOR_ME + ". "
+    "If it is a question, request, task or follow-up for you, answer normally.)"
+)

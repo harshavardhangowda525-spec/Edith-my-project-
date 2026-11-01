@@ -23,6 +23,8 @@ class ChatRequest(BaseModel):
     language: str | None = Field(default=None, max_length=20, description="BCP-47 tag, e.g. en-US")
     use_memory: bool = True
     use_documents: bool = True
+    # Conversation mode (phone app): heard without the wake word, may be meant for someone else.
+    followup: bool = False
 
     @field_validator("message")
     @classmethod
@@ -51,7 +53,8 @@ class ChatResponse(BaseModel):
 
 
 class AssistantResponse(BaseModel):
-    kind: Literal["action", "answer"]
+    # action: phone action · answer: spoken reply · ignore: not meant for EDITH · end: stop conversation mode
+    kind: Literal["action", "answer", "ignore", "end"]
     # kind == "action": a phone action for the app to perform on the device
     action: dict[str, Any] | None = None
     say: str | None = None

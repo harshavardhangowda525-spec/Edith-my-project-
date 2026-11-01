@@ -97,6 +97,11 @@ class EdithService : Service() {
         ThreadPoolExecutor.DiscardOldestPolicy())
     private val transcript = ArrayDeque<String>() // last ~20 lines, memory only, cleared when meeting ends
     @Volatile private var speaking = false
+
+    // Conversation mode: after "Edith", keep listening for follow-ups until 2 min without one.
+    @Volatile private var conversationUntil = 0L
+    private val conversationEnd = AtomicBoolean(false)
+    private val conversationPending = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var lastAutoAnswerAt = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -213,6 +218,7 @@ class EdithService : Service() {
                 // Meeting mode switched on/off: meetings always use the phone mic (it hears the room).
                 if (EdithState.meetingMode != meeting) {
                     meeting = EdithState.meetingMode
+                    conversationUntil = 0
                     seg.reset()
                     if (!meeting) synchronized(transcript) { transcript.clear() }
                     current.close()
@@ -245,6 +251,27 @@ class EdithService : Service() {
                     continue
                 }
 
+                // 2a) Conversation mode: every sentence is checked by the server ("for EDITH or not?").
+                if (conversationUntil > 0) {
+                    val threshold = maxOf(noise * 3.0, 500.0)
+                    val speech = level > threshold
+                    if (!speech) noise = noise * 0.98 + level * 0.02
+                    val busy = speaking || conversationPending.get() > 0
+                    val segment = if (busy) null else seg.add(buf, speech)
+                    if (segment != null) submitConversationSegment(segment, prefs)
+                    askNow.set(false)
+                    val timedOut = !busy && !seg.inSpeech && System.currentTimeMillis() > conversationUntil
+                    if (conversationEnd.get() || timedOut) {
+                        conversationUntil = 0
+                        seg.reset()
+                        current.flush()
+                        recognizer.reset()
+                        endTone()
+                        setStatus(listening)
+                    }
+                    continue
+                }
+
                 // 2) Wake word: a finished phrase, or "Edith" followed by a short pause.
                 val manual = askNow.getAndSet(false)
                 var detected = false
@@ -267,7 +294,15 @@ class EdithService : Service() {
                 handleQuestion(current, FRAME, SAMPLE_RATE, noise, prefs)
                 current.flush() // drop audio captured while EDITH was thinking/speaking
                 recognizer.reset()
-                if (running.get()) setStatus(listening)
+                if (!running.get()) break
+                if (prefs.conversationMode) {
+                    conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+                    conversationEnd.set(false)
+                    seg.reset()
+                    setStatus(CONVERSATION_STATUS)
+                } else {
+                    setStatus(listening)
+                }
             }
         } catch (e: InterruptedException) {
             // stopping
@@ -358,6 +393,8 @@ class EdithService : Service() {
 
         fun reset() { pcm.reset(); preRoll.clear(); speechFrames = 0; silentFrames = 0; frames = 0 }
 
+        val inSpeech: Boolean get() = frames > 0
+
         fun add(buf: ShortArray, speech: Boolean): ByteArray? {
             if (frames == 0 && !speech) {
                 preRoll.addLast(buf.copyOf())
@@ -396,6 +433,68 @@ class EdithService : Service() {
             if (looksLikeQuestion(text) && System.currentTimeMillis() - lastAutoAnswerAt > 6000) {
                 meetingHelp(api, lang, force = false)
             }
+        }
+    }
+
+    /** Conversation mode: transcribe one sentence and let the server decide if it was for EDITH. */
+    private fun submitConversationSegment(wav: ByteArray, prefs: Prefs) {
+        conversationPending.incrementAndGet()
+        meetingWorker.execute {
+            try {
+                val api = EdithApi(prefs.serverUrl, prefs.password)
+                val lang = Locale.getDefault().toLanguageTag()
+                val text = api.transcribe(wav, lang)
+                if (text.isBlank()) return@execute
+                EdithState.update(heard = text)
+                val hist = synchronized(history) { history.toList() }
+                val res = api.assistant(text, hist, lang, followup = true)
+                when (res.kind) {
+                    "ignore" -> Unit // side conversation: not for EDITH
+                    "end" -> {
+                        conversationEnd.set(true)
+                        speakWhisper(res.say.ifBlank { "Okay." })
+                    }
+                    else -> {
+                        conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+                        EdithState.update(question = text, answer = "")
+                        val spoken = speakingDuring {
+                            res.action?.let { performAction(it, res.say, prefs) }
+                                ?: res.reply.ifBlank { "I don't have an answer for that." }.also {
+                                    EdithState.update(answer = it)
+                                    speak(it)
+                                }
+                        }
+                        synchronized(history) {
+                            history.addLast(EdithApi.Turn("user", text))
+                            history.addLast(EdithApi.Turn("assistant", spoken))
+                            while (history.size > 12) history.removeFirst()
+                        }
+                        conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+                    }
+                }
+            } catch (e: EdithException) {
+                EdithState.update(heard = "⚠ ${e.message}")
+            } finally {
+                conversationPending.decrementAndGet()
+            }
+        }
+    }
+
+    private fun <T> speakingDuring(block: () -> T): T {
+        speaking = true
+        try { return block() } finally { speaking = false }
+    }
+
+    /** Soft two-tone signal: conversation mode ended, back to waiting for "Edith". */
+    private fun endTone() {
+        try {
+            val stream = if (routing.headsetActive) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_MUSIC
+            val tone = ToneGenerator(stream, 50)
+            tone.startTone(ToneGenerator.TONE_PROP_ACK, 200)
+            Thread.sleep(250)
+            tone.release()
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "tone failed", e)
         }
     }
 
@@ -468,16 +567,18 @@ class EdithService : Service() {
                 return
             }
             EdithState.update(question = question, answer = "")
-            val result = api.assistant(question, history.toList(), lang)
+            val result = api.assistant(question, synchronized(history) { history.toList() }, lang)
             val spoken = result.action?.let { performAction(it, result.say, prefs) }
                 ?: result.reply.ifBlank { "I don't have an answer for that." }.also {
                     EdithState.update(answer = it)
                     setStatus("Speaking…")
                     speak(it)
                 }
-            history.addLast(EdithApi.Turn("user", question))
-            history.addLast(EdithApi.Turn("assistant", spoken))
-            while (history.size > 12) history.removeFirst()
+            synchronized(history) {
+                history.addLast(EdithApi.Turn("user", question))
+                history.addLast(EdithApi.Turn("assistant", spoken))
+                while (history.size > 12) history.removeFirst()
+            }
         } catch (e: EdithException) {
             EdithState.update(answer = "⚠ ${e.message}")
             speak(e.message ?: "Something went wrong.")
@@ -721,6 +822,8 @@ class EdithService : Service() {
         private const val CHANNEL = "edith_listening"
         private const val NOTIFICATION_ID = 7
         private const val SAMPLE_RATE = 16000
+        private const val CONVERSATION_MS = 120_000L // 2 minutes without a question for EDITH
+        private const val CONVERSATION_STATUS = "Conversation mode: listening (say \"stop listening\" to end)"
         private const val FRAME = 1600 // 100 ms
 
         /**

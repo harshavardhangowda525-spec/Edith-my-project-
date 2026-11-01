@@ -62,6 +62,29 @@ The first start takes a few seconds while the offline speech model is prepared.
 "Hey Edith", pause briefly, wait for the beep, then ask. Turn it off to also wake when "Edith"
 appears inside a longer sentence. That's more responsive but wakes by mistake more often.
 
+## Conversation mode: keep talking after "Edith"
+
+After you say "Edith" and get your first answer, EDITH **keeps listening**. Ask follow-ups or give
+tasks without saying "Edith" again:
+
+```
+You: "Edith" → beep → "What's Docker?"            → answers, then keeps listening
+You: "And how is it different from a VM?"          → answers (follow-up understood)
+You (to a friend): "Let's get lunch at one"        → ignored (not meant for EDITH)
+You: "Set a timer for 10 minutes"                  → does it
+You: "That's all" / "Stop listening" / "Thanks Edith" → ends with a soft tone
+```
+
+* It ends by itself after **2 minutes** without a question for EDITH, then waits for "Edith" again.
+* Saying "Edith" in a sentence ("Edith, call Rahul") always counts as meant for EDITH.
+* Side conversations are recognised by the AI using the conversation so far. It's usually right
+  but not perfect: a question asked to a friend ("what time is it?") may still get answered.
+  Overheard remarks are never guessed into phone actions; only clear commands like "set a timer
+  for 10 minutes" run without "Edith".
+* While it's on, sentences said near you are sent to Groq to be turned into text (nothing is saved),
+  so it uses more battery and Groq quota than wake-word-only listening.
+* Turn it off in the app: uncheck **Keep listening after "Edith"** (section 2).
+
 ## Phone control: calls, apps, music, alarms
 
 Say "Edith", wait for the beep, then:

@@ -40,12 +40,29 @@ async def assistant(
 
     The server only describes the action; the phone performs it with its own permissions.
     """
-    action = await command_service.understand(body.message, ai)
+    message = body.message
+    directed = True
+    if body.followup:
+        quick = command_service.followup_kind(message)
+        if quick == "end":
+            return AssistantResponse(kind="end", say="Okay.")
+        if quick == "ignore":
+            return AssistantResponse(kind="ignore")
+        if quick == "wake":
+            return AssistantResponse(kind="answer", reply="Yes?")
+        directed = command_service.addressed_to_edith(message)
+        if directed:
+            message = command_service.strip_wake_word(message)
+
+    action = await command_service.understand(message, ai, allow_ai=directed)
     if action:
         return AssistantResponse(kind="action", action=action, say=command_service.describe(action))
     memories = memory.for_prompt(user.id) if body.use_memory else []
-    sources = retrieval.search(user.id, body.message) if body.use_documents else []
-    result = await ai.chat(body.message, body.history, mode=body.mode, model=body.model,
+    sources = retrieval.search(user.id, message) if body.use_documents else []
+    prompt = message if directed else message + command_service.FOLLOWUP_NOTE
+    result = await ai.chat(prompt, body.history, mode=body.mode, model=body.model,
                            memories=memories, sources=sources, language=body.language)
+    if not directed and command_service.NOT_FOR_ME in result.text.upper().replace(" ", "_"):
+        return AssistantResponse(kind="ignore", model=result.model, mock=result.mock)
     return AssistantResponse(kind="answer", reply=result.text, model=result.model, mock=result.mock,
                              sources=sources)

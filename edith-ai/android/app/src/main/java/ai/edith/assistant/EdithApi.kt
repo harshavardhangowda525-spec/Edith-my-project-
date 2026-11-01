@@ -57,19 +57,25 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         return JSONObject(res).optString("reply").trim()
     }
 
-    data class Assistant(val action: JSONObject?, val say: String, val reply: String)
+    /** kind: "action" | "answer" | "ignore" (not meant for EDITH) | "end" (stop conversation mode) */
+    data class Assistant(val kind: String, val action: JSONObject?, val say: String, val reply: String)
 
-    /** Voice entry point: either a phone action to perform, or a spoken answer. */
-    fun assistant(message: String, history: List<Turn>, language: String?): Assistant {
+    /**
+     * Voice entry point: a phone action to perform, or a spoken answer.
+     * followup = heard in conversation mode without the wake word (may be meant for someone else).
+     */
+    fun assistant(message: String, history: List<Turn>, language: String?, followup: Boolean = false): Assistant {
         val payload = JSONObject()
             .put("message", message)
             .put("mode", "earbud")
+            .put("followup", followup)
             .put("history", JSONArray().apply {
                 history.takeLast(12).forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
             })
         if (!language.isNullOrBlank()) payload.put("language", language)
         val res = JSONObject(request("POST", "/api/assistant", payload.toString().toByteArray(), "application/json"))
         return Assistant(
+            kind = res.optString("kind", "answer"),
             action = if (res.optString("kind") == "action") res.optJSONObject("action") else null,
             say = if (res.isNull("say")) "" else res.optString("say"),
             reply = if (res.isNull("reply")) "" else res.optString("reply").trim(),

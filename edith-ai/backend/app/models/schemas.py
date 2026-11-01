@@ -115,6 +115,32 @@ class MeetingSummaryRequest(BaseModel):
     consent_confirmed: bool
 
 
+class MeetingAssistRequest(BaseModel):
+    # Recent meeting transcript, oldest first, newest line last. Kept only on the phone, in memory.
+    transcript: list[str] = Field(min_length=1, max_length=40)
+    # True when the user explicitly asked (button / "Edith"): always answer the latest question.
+    force: bool = False
+    # The user confirmed participants know an AI assistant is listening.
+    consent_confirmed: bool
+    language: str | None = Field(default=None, max_length=20)
+
+    @field_validator("transcript")
+    @classmethod
+    def _limit(cls, v: list[str]) -> list[str]:
+        v = [line.strip()[:1000] for line in v if line and line.strip()]
+        if not v:
+            raise ValueError("transcript must contain text")
+        return v
+
+
+class MeetingAssistResponse(BaseModel):
+    answer: str | None  # None = nothing to answer
+    question: str | None = None
+    sources: list[Source] = Field(default_factory=list)
+    model: str
+    mock: bool
+
+
 class MeetingResponse(BaseModel):
     content: str
     sources: list[Source] = Field(default_factory=list)

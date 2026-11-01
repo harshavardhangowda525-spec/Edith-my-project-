@@ -57,6 +57,20 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         return JSONObject(res).optString("reply").trim()
     }
 
+    data class MeetingHelp(val question: String?, val answer: String?)
+
+    /** Live meeting help. Returns answer = null when there is nothing worth answering. */
+    fun meetingAssist(transcript: List<String>, force: Boolean, language: String?): MeetingHelp {
+        val payload = JSONObject()
+            .put("transcript", JSONArray(transcript.takeLast(12)))
+            .put("force", force)
+            .put("consent_confirmed", true) // confirmed by the user when switching Meeting mode on
+        if (!language.isNullOrBlank()) payload.put("language", language)
+        val res = JSONObject(request("POST", "/api/meeting/assist", payload.toString().toByteArray(), "application/json"))
+        fun str(key: String) = if (res.isNull(key)) null else res.optString(key).trim().ifBlank { null }
+        return MeetingHelp(str("question"), str("answer"))
+    }
+
     private fun request(
         method: String, path: String, body: ByteArray? = null,
         contentType: String? = null, auth: Boolean = true,

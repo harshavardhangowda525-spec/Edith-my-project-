@@ -280,3 +280,49 @@ def test_meeting_briefing(client: TestClient) -> None:
     r = client.post("/api/meeting/briefing", headers=auth(), json={"topic": "backend architecture"})
     assert r.status_code == 200
     assert r.json()["sources"]
+
+
+# --- live meeting assist --------------------------------------------------------
+
+def _assist_client(reply: str) -> tuple[TestClient, RecordingProvider]:
+    p = RecordingProvider(reply)
+    return _client_with(p), p
+
+
+def test_meeting_assist_answers_question() -> None:
+    c, p = _assist_client("Q: What does database mean?\nA database is an organised store of data that software can query.")
+    c.post("/api/documents", headers=auth(), json={"title": "Project", "content": "Our database is PostgreSQL on Supabase."})
+    r = c.post("/api/meeting/assist", headers=auth(), json={
+        "transcript": ["Thanks for joining.", "So what does database mean in your project?"],
+        "consent_confirmed": True})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["question"] == "What does database mean?"
+    assert body["answer"].startswith("A database is")
+    sent = p.calls[0]["messages"][-1]["content"]
+    assert "what does database mean in your project?" in sent and "NO_ANSWER" in sent
+    assert "PostgreSQL" in p.calls[0]["system"]  # grounded in the user's documents
+
+
+def test_meeting_assist_skips_small_talk() -> None:
+    c, _ = _assist_client("NO_ANSWER")
+    r = c.post("/api/meeting/assist", headers=auth(), json={
+        "transcript": ["Hi, how are you doing today?"], "consent_confirmed": True})
+    assert r.status_code == 200 and r.json()["answer"] is None
+
+
+def test_meeting_assist_force_always_answers() -> None:
+    c, p = _assist_client("The last point was about pricing.")
+    r = c.post("/api/meeting/assist", headers=auth(), json={
+        "transcript": ["We discussed pricing."], "force": True, "consent_confirmed": True})
+    assert r.json()["answer"] == "The last point was about pricing."
+    assert "pressed the help button" in p.calls[0]["messages"][-1]["content"]
+
+
+def test_meeting_assist_requires_consent_and_auth(client: TestClient) -> None:
+    body = {"transcript": ["What is an API?"], "consent_confirmed": False}
+    assert client.post("/api/meeting/assist", json=body).status_code == 401
+    r = client.post("/api/meeting/assist", headers=auth(), json=body)
+    assert r.status_code == 422 and r.json()["error"]["code"] == "consent_required"
+    r = client.post("/api/meeting/assist", headers=auth(), json={"transcript": ["  "], "consent_confirmed": True})
+    assert r.status_code == 422

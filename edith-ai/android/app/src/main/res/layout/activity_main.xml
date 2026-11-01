@@ -45,6 +45,16 @@
             style="@style/SmallButton"
             android:text="Ask now (without wake word)" />
 
+        <Button
+            android:id="@+id/meetingToggle"
+            style="@style/SmallButton"
+            android:text="Start Meeting mode" />
+
+        <TextView
+            android:id="@+id/heard"
+            style="@style/Hint"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/lastQa"
             style="@style/Hint"

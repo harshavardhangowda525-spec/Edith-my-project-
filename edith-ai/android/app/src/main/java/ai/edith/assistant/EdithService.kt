@@ -37,7 +37,9 @@ import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
@@ -49,6 +51,9 @@ object EdithState {
     @Volatile var lastQuestion = ""
     @Volatile var lastAnswer = ""
     @Volatile var micLevel = 0.0
+    /** Meeting mode: answer questions heard in the room automatically (user-confirmed consent). */
+    @Volatile var meetingMode = false
+    @Volatile var lastHeard = ""
     private val main = Handler(Looper.getMainLooper())
     private val listeners = mutableSetOf<() -> Unit>()
 
@@ -59,8 +64,9 @@ object EdithState {
         main.post { listeners.toList().forEach { it() } }
     }
 
-    fun update(status: String? = null, question: String? = null, answer: String? = null) {
+    fun update(status: String? = null, question: String? = null, answer: String? = null, heard: String? = null) {
         status?.let { this.status = it }
+        heard?.let { lastHeard = it }
         question?.let { lastQuestion = it }
         answer?.let { lastAnswer = it }
         main.post { listeners.toList().forEach { it() } }
@@ -84,6 +90,13 @@ class EdithService : Service() {
     private lateinit var routing: AudioRouting
     private val history = ArrayDeque<EdithApi.Turn>()
 
+    // Meeting mode: speech segments are transcribed/answered on this thread so listening never pauses.
+    private val meetingWorker = ThreadPoolExecutor(1, 1, 30, TimeUnit.SECONDS, ArrayBlockingQueue(3),
+        ThreadPoolExecutor.DiscardOldestPolicy())
+    private val transcript = ArrayDeque<String>() // last ~20 lines, memory only, cleared when meeting ends
+    @Volatile private var speaking = false
+    @Volatile private var lastAutoAnswerAt = 0L
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -103,6 +116,8 @@ class EdithService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_ASK -> askNow.set(true)
+            ACTION_MEETING_ON -> EdithState.meetingMode = true
+            ACTION_MEETING_OFF -> EdithState.meetingMode = false
         }
         startInForeground("Starting…")
         if (running.compareAndSet(false, true)) {
@@ -116,6 +131,9 @@ class EdithService : Service() {
 
     override fun onDestroy() {
         running.set(false)
+        meetingWorker.shutdownNow()
+        synchronized(transcript) { transcript.clear() }
+        EdithState.meetingMode = false
         worker?.interrupt()
         worker?.join(1500)
         mediaSession?.release()
@@ -145,9 +163,13 @@ class EdithService : Service() {
         var mic: Mic? = null
         try {
             recognizer = Recognizer(model, SAMPLE_RATE.toFloat(), WAKE_GRAMMAR)
-            var current: Mic = openMic(prefs) ?: return
+            var meeting = EdithState.meetingMode
+            var current: Mic = openMic(prefs, phoneOnly = meeting) ?: return
             mic = current
-            var listening = "Listening for \"Edith\" (${current.name})"
+            fun statusText(m: Mic) = if (meeting) "Meeting mode: listening for questions (${m.name})"
+            else "Listening for \"Edith\" (${m.name})"
+            var listening = statusText(current)
+            val seg = Segmenter()
             setStatus(listening)
 
             val buf = ShortArray(FRAME)
@@ -162,16 +184,48 @@ class EdithService : Service() {
                         current.close()
                         mic = null
                         Thread.sleep(300)
-                        current = openMic(prefs) ?: return
+                        current = openMic(prefs, phoneOnly = meeting) ?: return
                         mic = current
-                        listening = "Listening for \"Edith\" (${current.name})"
+                        listening = statusText(current)
                         setStatus(listening)
                         recognizer.reset()
                     }
                     continue
                 }
+                // Meeting mode switched on/off: meetings always use the phone mic (it hears the room).
+                if (EdithState.meetingMode != meeting) {
+                    meeting = EdithState.meetingMode
+                    seg.reset()
+                    if (!meeting) synchronized(transcript) { transcript.clear() }
+                    current.close()
+                    mic = null
+                    current = openMic(prefs, phoneOnly = meeting) ?: return
+                    mic = current
+                    listening = statusText(current)
+                    setStatus(listening)
+                    recognizer.reset()
+                    continue
+                }
                 val level = rms(buf)
                 if (++frameCount % 5 == 0) EdithState.level(level)
+
+                if (meeting) {
+                    val threshold = maxOf(noise * 3.0, 500.0)
+                    val speech = level > threshold
+                    if (!speech) noise = noise * 0.98 + level * 0.02
+                    // Ignore the room while EDITH itself is whispering an answer.
+                    val segment = if (speaking) null else seg.add(buf, speech)
+                    if (segment != null) submitMeetingSegment(segment, prefs)
+                    var trigger = askNow.getAndSet(false)
+                    if (recognizer.acceptWaveForm(buf, buf.size)) {
+                        trigger = trigger || isWakeWord(jsonText(recognizer.result, "text"), prefs.strictWake)
+                    }
+                    if (trigger) {
+                        beep()
+                        submitMeetingHelp(prefs, force = true)
+                    }
+                    continue
+                }
 
                 // 2) Wake word: a finished phrase, or "Edith" followed by a short pause.
                 val manual = askNow.getAndSet(false)
@@ -252,9 +306,9 @@ class EdithService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun openMic(prefs: Prefs): Mic? {
+    private fun openMic(prefs: Prefs, phoneOnly: Boolean = false): Mic? {
         routing.release()
-        val headsetInput = if (prefs.micSource == "headset") routing.useHeadsetMic() else null
+        val headsetInput = if (prefs.micSource == "headset" && !phoneOnly) routing.useHeadsetMic() else null
         val source = if (headsetInput != null) MediaRecorder.AudioSource.VOICE_COMMUNICATION
         else MediaRecorder.AudioSource.VOICE_RECOGNITION
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
@@ -272,6 +326,102 @@ class EdithService : Service() {
 
     private fun jsonText(json: String, key: String): String =
         runCatching { JSONObject(json).optString(key) }.getOrDefault("")
+
+    /**
+     * Cuts continuous room audio into sentences: speech followed by ~0.7 s of quiet
+     * (or 15 s max). Returns a finished segment as WAV, otherwise null. Memory only.
+     */
+    private class Segmenter {
+        private val pcm = ByteArrayOutputStream()
+        private val preRoll = ArrayDeque<ShortArray>()
+        private var speechFrames = 0
+        private var silentFrames = 0
+        private var frames = 0
+
+        fun reset() { pcm.reset(); preRoll.clear(); speechFrames = 0; silentFrames = 0; frames = 0 }
+
+        fun add(buf: ShortArray, speech: Boolean): ByteArray? {
+            if (frames == 0 && !speech) {
+                preRoll.addLast(buf.copyOf())
+                if (preRoll.size > 3) preRoll.removeFirst()
+                return null
+            }
+            if (frames == 0) preRoll.forEach { appendPcm(pcm, it) }
+            appendPcm(pcm, buf)
+            frames++
+            if (speech) { speechFrames++; silentFrames = 0 } else silentFrames++
+            if (silentFrames < 7 && frames < 150) return null
+            val done = if (speechFrames >= 4) wavBytes(pcm.toByteArray(), SAMPLE_RATE) else null
+            reset()
+            return done
+        }
+    }
+
+    private fun submitMeetingSegment(wav: ByteArray, prefs: Prefs) {
+        meetingWorker.execute {
+            val api = EdithApi(prefs.serverUrl, prefs.password)
+            val lang = Locale.getDefault().toLanguageTag()
+            val text = try {
+                api.transcribe(wav, lang)
+            } catch (e: EdithException) {
+                EdithState.update(heard = "⚠ ${e.message}")
+                return@execute
+            }
+            if (text.isBlank() || text.length < 3) return@execute
+            synchronized(transcript) {
+                transcript.addLast(text)
+                while (transcript.size > 20) transcript.removeFirst()
+            }
+            EdithState.update(heard = text)
+            // Only ask the AI when the line looks like a question (saves time and quota),
+            // and not right after another automatic answer.
+            if (looksLikeQuestion(text) && System.currentTimeMillis() - lastAutoAnswerAt > 6000) {
+                meetingHelp(api, lang, force = false)
+            }
+        }
+    }
+
+    private fun submitMeetingHelp(prefs: Prefs, force: Boolean) {
+        meetingWorker.execute {
+            meetingHelp(EdithApi(prefs.serverUrl, prefs.password), Locale.getDefault().toLanguageTag(), force)
+        }
+    }
+
+    /** Runs on the meeting worker thread. */
+    private fun meetingHelp(api: EdithApi, lang: String, force: Boolean) {
+        val lines = synchronized(transcript) { transcript.toList() }
+        if (lines.isEmpty()) {
+            if (force) speakWhisper("I haven't heard anything yet.")
+            return
+        }
+        try {
+            val help = api.meetingAssist(lines, force, lang)
+            val answer = help.answer ?: return
+            lastAutoAnswerAt = System.currentTimeMillis()
+            synchronized(transcript) { transcript.addLast("(EDITH suggested: $answer)") }
+            EdithState.update(question = help.question ?: lines.last(), answer = answer)
+            updateNotification("💡 $answer")
+            speakWhisper(answer)
+            updateNotification("Meeting mode: listening for questions")
+        } catch (e: EdithException) {
+            if (force) speakWhisper(e.message ?: "Something went wrong.")
+            EdithState.update(heard = "⚠ ${e.message}")
+        }
+    }
+
+    private fun speakWhisper(text: String) {
+        speaking = true
+        try { speak(text) } finally { speaking = false }
+    }
+
+    /** Cheap pre-filter; the server's AI makes the real "is this a question for me?" decision. */
+    private fun looksLikeQuestion(text: String): Boolean {
+        val t = text.trim().lowercase()
+        if (t.endsWith("?")) return true
+        val words = t.split(' ', ',', '.', '!').filter { it.isNotBlank() }
+        val first = words.firstOrNull { it !in FILLERS } ?: return false
+        return first in QUESTION_STARTS || words.any { it in WH_WORDS } || QUESTION_PHRASES.any { it in t }
+    }
 
     /** Recognised text -> did the user say the wake word? */
     private fun isWakeWord(text: String, strict: Boolean): Boolean {
@@ -354,20 +504,9 @@ class EdithService : Service() {
         return sqrt(sum / buf.size)
     }
 
-    private fun writePcm(out: ByteArrayOutputStream, buf: ShortArray) {
-        val bb = ByteBuffer.allocate(buf.size * 2).order(ByteOrder.LITTLE_ENDIAN)
-        buf.forEach { bb.putShort(it) }
-        out.write(bb.array())
-    }
+    private fun writePcm(out: ByteArrayOutputStream, buf: ShortArray) = appendPcm(out, buf)
 
-    private fun wav(pcm: ByteArray, rate: Int): ByteArray {
-        val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
-        h.put("RIFF".toByteArray()).putInt(36 + pcm.size).put("WAVE".toByteArray())
-        h.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(rate).putInt(rate * 2)
-            .putShort(2).putShort(16)
-        h.put("data".toByteArray()).putInt(pcm.size)
-        return h.array() + pcm
-    }
+    private fun wav(pcm: ByteArray, rate: Int): ByteArray = wavBytes(pcm, rate)
 
     private fun beep() {
         try {
@@ -472,7 +611,14 @@ class EdithService : Service() {
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
-            .addAction(0, "Ask now", ask)
+            .addAction(0, if (EdithState.meetingMode) "Answer now" else "Ask now", ask)
+            .apply {
+                if (EdithState.meetingMode) {
+                    val end = PendingIntent.getService(this@EdithService, 3,
+                        Intent(this@EdithService, EdithService::class.java).setAction(ACTION_MEETING_OFF), flags)
+                    addAction(0, "End meeting", end)
+                }
+            }
             .addAction(0, "Stop", stop)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
@@ -510,9 +656,38 @@ class EdithService : Service() {
         ).toString()
         const val ACTION_STOP = "ai.edith.assistant.STOP"
         const val ACTION_ASK = "ai.edith.assistant.ASK"
+        const val ACTION_MEETING_ON = "ai.edith.assistant.MEETING_ON"
+        const val ACTION_MEETING_OFF = "ai.edith.assistant.MEETING_OFF"
+        private val QUESTION_STARTS = setOf(
+            "what", "what's", "whats", "why", "how", "when", "where", "who", "whom", "which", "can", "could",
+            "would", "will", "is", "are", "do", "does", "did", "should", "shall", "may", "explain", "tell",
+            "define", "describe", "any", "have", "has",
+        )
+        private val FILLERS = setOf("so", "and", "but", "okay", "ok", "um", "uh", "well", "then", "also",
+            "now", "right", "hey", "yeah", "like", "actually", "basically", "just", "sorry", "please")
+        private val WH_WORDS = setOf("what", "what's", "whats", "why", "how", "which", "who", "where", "when")
+        private val QUESTION_PHRASES = listOf(
+            "what is", "what does", "what are", "how do", "how does", "how much", "how many", "why do",
+            "can you", "could you", "do you know", "tell me", "explain", "meaning of", "difference between",
+        )
         private val MEDIA_KEYS = setOf(
             KeyEvent.KEYCODE_HEADSETHOOK, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
         )
     }
+}
+
+private fun appendPcm(out: ByteArrayOutputStream, buf: ShortArray) {
+    val bb = ByteBuffer.allocate(buf.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+    buf.forEach { bb.putShort(it) }
+    out.write(bb.array())
+}
+
+private fun wavBytes(pcm: ByteArray, rate: Int): ByteArray {
+    val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+    h.put("RIFF".toByteArray()).putInt(36 + pcm.size).put("WAVE".toByteArray())
+    h.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(rate).putInt(rate * 2)
+        .putShort(2).putShort(16)
+    h.put("data".toByteArray()).putInt(pcm.size)
+    return h.array() + pcm
 }

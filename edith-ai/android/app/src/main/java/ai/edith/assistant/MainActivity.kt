@@ -32,11 +32,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var toggle: Button
     private lateinit var lastQa: TextView
     private lateinit var micLevel: TextView
+    private lateinit var meetingToggle: Button
+    private lateinit var heard: TextView
     private val stateListener: () -> Unit = { render() }
 
     private val askPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
         if (res[Manifest.permission.RECORD_AUDIO] == true) startEdith()
-        else toast("EDITH needs microphone permission to hear “Edith”.")
+        else { EdithState.meetingMode = false; toast("EDITH needs microphone permission to hear “Edith”.") }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -53,6 +55,11 @@ class MainActivity : AppCompatActivity() {
         toggle = findViewById(R.id.toggle)
         lastQa = findViewById(R.id.lastQa)
         micLevel = findViewById(R.id.micLevel)
+        meetingToggle = findViewById(R.id.meetingToggle)
+        heard = findViewById(R.id.heard)
+        meetingToggle.setOnClickListener {
+            if (EdithState.meetingMode) setMeeting(false) else confirmMeeting()
+        }
 
         bindText(R.id.serverUrl, prefs.serverUrl) { prefs.serverUrl = it }
         bindText(R.id.password, prefs.password) { prefs.password = it }
@@ -106,13 +113,49 @@ class MainActivity : AppCompatActivity() {
             if (EdithState.lastAnswer.isNotBlank()) append("EDITH: ${EdithState.lastAnswer}")
         }
         lastQa.visibility = if (lastQa.text.isBlank()) View.GONE else View.VISIBLE
+        meetingToggle.text = if (EdithState.meetingMode) "End Meeting mode" else "Start Meeting mode"
+        val showHeard = EdithState.meetingMode && EdithState.lastHeard.isNotBlank()
+        heard.text = if (showHeard) "Heard: ${EdithState.lastHeard}" else ""
+        heard.visibility = if (showHeard) View.VISIBLE else View.GONE
+    }
+
+    /** Meeting mode listens to the room, so the user confirms participants know first. */
+    private fun confirmMeeting() {
+        prefs.missing()?.let { toast(it); return }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Start Meeting mode?")
+            .setMessage(
+                "EDITH will listen to the conversation through the phone's microphone, turn what " +
+                    "people say into text, and whisper answers to questions in your earbud.\n\n" +
+                    "Only start it if everyone in the meeting knows an AI assistant is listening " +
+                    "(e.g. say \"I use an AI note assistant\"). Recording people without consent can " +
+                    "be illegal and may breach client agreements.\n\n" +
+                    "No audio is saved. Only the last ~20 lines of text are kept in memory and " +
+                    "deleted when the meeting ends. Put the phone where it can hear the room."
+            )
+            .setPositiveButton("Everyone knows – start") { _, _ -> setMeeting(true) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun setMeeting(on: Boolean) {
+        EdithState.meetingMode = on
+        if (on && !EdithState.running) {
+            requestAndStart()
+        } else if (EdithState.running) {
+            val action = if (on) EdithService.ACTION_MEETING_ON else EdithService.ACTION_MEETING_OFF
+            startService(Intent(this, EdithService::class.java).setAction(action))
+        }
+        render()
     }
 
     private fun requestAndStart() {
         prefs.missing()?.let { toast(it); return }
         val needed = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= 33) needed += Manifest.permission.POST_NOTIFICATIONS
-        if (Build.VERSION.SDK_INT >= 31 && prefs.micSource == "headset") needed += Manifest.permission.BLUETOOTH_CONNECT
+        if (Build.VERSION.SDK_INT >= 31 && prefs.micSource == "headset" && !EdithState.meetingMode) {
+            needed += Manifest.permission.BLUETOOTH_CONNECT
+        }
         val missing = needed.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) startEdith() else askPermissions.launch(missing.toTypedArray())
     }

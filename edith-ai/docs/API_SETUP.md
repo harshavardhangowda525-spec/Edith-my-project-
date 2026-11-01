@@ -143,6 +143,7 @@ Allowed in production. The app shows an unlock screen and stores the password on
 | `/api/documents/search?q=` | GET | ✓ | Debug retrieval |
 | `/api/meeting/briefing` | POST | ✓ (rate-limited) | Briefing from documents |
 | `/api/meeting/summarize` | POST | ✓ (rate-limited) | Summarise notes (consent required) |
+| `/api/meeting/assist` | POST | ✓ (rate-limited) | Live meeting help: answer the latest question in a transcript (consent required, nothing stored) |
 
 Interactive docs: <http://localhost:8000/docs> (disabled in production).
 

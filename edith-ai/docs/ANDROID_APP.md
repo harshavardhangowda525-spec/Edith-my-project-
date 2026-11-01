@@ -62,6 +62,41 @@ The first start takes a few seconds while the offline speech model is prepared.
 "Hey Edith", pause briefly, wait for the beep, then ask. Turn it off to also wake when "Edith"
 appears inside a longer sentence. That's more responsive but wakes by mistake more often.
 
+## Meeting mode: answers to the client's questions, automatically
+
+Tap **Start Meeting mode** and confirm that everyone in the meeting knows an AI assistant is
+listening. Then put the phone on the table, where it can hear the room.
+
+```
+Client: "So what does database mean in your project?"
+   ─► phone mic hears the sentence ─► text (Groq Whisper) ─► "is this a question for me?"
+   ─► EDITH whispers in your earbud: "A database is an organised store of data the app
+      reads and writes; in this project it's PostgreSQL on Supabase."
+```
+
+* **Automatic:** EDITH answers when someone asks a factual, technical or project question. It
+  ignores small talk ("how are you?") and statements. The answer also appears on the phone screen.
+* **On demand:** tap **Answer now** in the notification (or say "Edith") to answer the latest
+  question right away.
+* **Your knowledge:** upload project documents on the EDITH website (Settings → Documents) and
+  save memories. EDITH uses them to answer questions about *your* project and says when it's not sure.
+* **Microphone:** Meeting mode always uses the **phone** microphone, because the earbud mic mostly hears
+  you, not the client. Answers play in your earbuds.
+* **End it:** tap **End Meeting mode** in the app or **End meeting** in the notification.
+
+**Privacy and consent:** audio is never saved. Only the last ~20 lines of text are kept in the phone's
+memory and deleted when the meeting ends. The server stores nothing. A notification is shown the
+whole time. Recording people without their knowledge can be illegal and may breach client
+agreements, so tell participants you use an AI assistant (e.g. "I use an AI note assistant").
+
+**Good to know:**
+* Answers arrive about 3–6 seconds after the question (longer if the free server was asleep: open
+  the app a minute before the meeting).
+* Each spoken sentence is sent to Groq for transcription. Long meetings use more of your Groq
+  quota; check your limits at console.groq.com.
+* Busy rooms, distant speakers or people talking over each other lower accuracy.
+* For video calls (Zoom/Meet on a laptop), the phone must be able to hear the laptop's speaker.
+
 ## Microphone choice
 
 | Setting | Good | Trade-off |

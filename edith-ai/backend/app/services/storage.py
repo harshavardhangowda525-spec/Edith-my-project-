@@ -9,11 +9,13 @@ access through the anon key.
 """
 from __future__ import annotations
 
+import re
 import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -151,6 +153,51 @@ class InMemoryStore:
         ]
 
 
+def normalize_supabase_url(url: str) -> str:
+    """Turn common pastes into https://<ref>.supabase.co.
+
+    Handles dashboard links (supabase.com/dashboard/project/<ref>/...), a missing
+    https://, and copies that include /rest/v1 or other paths.
+    """
+    url = url.strip().strip("\"'")
+    m = re.search(r"supabase\.com/dashboard/project/([a-z0-9]+)", url)
+    if m:
+        return f"https://{m.group(1)}.supabase.co"
+    if "://" not in url:
+        url = "https://" + url
+    parts = urlsplit(url)
+    if parts.hostname and parts.hostname.endswith(".supabase.co"):
+        return f"https://{parts.hostname}"
+    return url.rstrip("/").removesuffix("/rest/v1")  # self-hosted Supabase: keep host/path
+
+
+def _database_error(r: httpx.Response) -> ProviderError:
+    """Explain a PostgREST error without exposing keys or row data."""
+    try:
+        body = r.json()
+    except ValueError:
+        body = None
+    code = body.get("code", "") if isinstance(body, dict) else ""
+    detail = (body.get("message", "") if isinstance(body, dict) else "")[:200]
+    if code in ("PGRST205", "42P01", "PGRST106") or "schema cache" in detail or "does not exist" in detail:
+        msg = ("Supabase database tables are missing. In Supabase open SQL Editor, paste all of "
+               "edith-ai/database/schema.sql and click Run.")
+    elif r.status_code == 404:
+        msg = ("Supabase address not found. SUPABASE_URL must look like https://<project-ref>.supabase.co "
+               "(Supabase -> Project Settings -> Data API -> Project URL).")
+    elif r.status_code in (401, 403):
+        msg = ("Supabase rejected the key. Set SUPABASE_SERVICE_ROLE_KEY to the service_role (or "
+               "sb_secret_...) key of the same project as SUPABASE_URL.")
+    elif code == "23503":
+        msg = ("OWNER_USER_ID is not a user in this Supabase project. Copy the User UID from "
+               "Authentication -> Users of the same project as SUPABASE_URL.")
+    else:
+        msg = f"Database error ({r.status_code})"
+    if detail:
+        msg += f" [Supabase says: {detail}]"
+    return ProviderError(msg, code="database_error")
+
+
 class SupabaseStore:
     """Supabase PostgREST adapter (server-side, service-role key)."""
 
@@ -164,16 +211,18 @@ class SupabaseStore:
         # "sb_secret_..." keys are not JWTs and are sent in the apikey header only.
         if service_key.startswith("eyJ"):
             headers["Authorization"] = f"Bearer {service_key}"
-        self._client = httpx.Client(base_url=url.rstrip("/") + "/rest/v1", headers=headers,
+        self.base_url = normalize_supabase_url(url)
+        self._client = httpx.Client(base_url=self.base_url + "/rest/v1", headers=headers,
                                     timeout=timeout)
 
     def _req(self, method: str, path: str, **kw: Any) -> Any:
         try:
             r = self._client.request(method, path, **kw)
         except httpx.HTTPError as exc:
-            raise ProviderError("Database request failed", code="database_error") from exc
+            raise ProviderError("Could not reach Supabase. Check SUPABASE_URL "
+                                "(https://<project-ref>.supabase.co).", code="database_error") from exc
         if r.status_code >= 400:
-            raise ProviderError(f"Database error ({r.status_code})", code="database_error")
+            raise _database_error(r)
         return r.json() if r.content else None
 
     @staticmethod

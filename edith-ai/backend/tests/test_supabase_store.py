@@ -48,3 +48,44 @@ def test_key_header_formats() -> None:
     legacy, new = route.calls[0].request.headers, route.calls[1].request.headers
     assert legacy["Authorization"] == "Bearer eyJhbGciOi.legacy.jwt"
     assert new["apikey"] == "sb_secret_abc123" and "Authorization" not in new
+
+
+def test_url_normalisation() -> None:
+    from app.services.storage import normalize_supabase_url as n
+    want = "https://abcd1234.supabase.co"
+    for pasted in [want, want + "/", want + "/rest/v1", want + "/rest/v1/", "abcd1234.supabase.co",
+                   " " + want + "\n", "https://supabase.com/dashboard/project/abcd1234",
+                   "https://supabase.com/dashboard/project/abcd1234/settings/api"]:
+        assert n(pasted) == want, pasted
+    assert n("https://db.example.com/") == "https://db.example.com"
+
+
+@respx.mock
+def test_missing_tables_message() -> None:
+    respx.get(f"{URL}/rest/v1/profiles").mock(return_value=httpx.Response(404, json={
+        "code": "PGRST205", "message": "Could not find the table 'public.profiles' in the schema cache"}))
+    with pytest.raises(Exception) as exc:
+        SupabaseStore(URL, "k").get_memory_enabled("u1")
+    assert "schema.sql" in str(exc.value)
+
+
+@respx.mock
+def test_wrong_url_message() -> None:
+    respx.get(f"{URL}/rest/v1/profiles").mock(return_value=httpx.Response(404, text="<html>Not found</html>"))
+    with pytest.raises(Exception) as exc:
+        SupabaseStore(URL, "k").get_memory_enabled("u1")
+    assert "SUPABASE_URL" in str(exc.value)
+
+
+@respx.mock
+def test_bad_key_and_unknown_owner_messages() -> None:
+    respx.get(f"{URL}/rest/v1/memories").mock(return_value=httpx.Response(401, json={"message": "Invalid API key"}))
+    respx.post(f"{URL}/rest/v1/memories").mock(return_value=httpx.Response(409, json={
+        "code": "23503", "message": "insert or update violates foreign key constraint"}))
+    s = SupabaseStore(URL, "k")
+    with pytest.raises(Exception) as e1:
+        s.list_memories("u1")
+    assert "SUPABASE_SERVICE_ROLE_KEY" in str(e1.value) and "k" != str(e1.value)
+    with pytest.raises(Exception) as e2:
+        s.create_memory("u1", "hi", "general")
+    assert "OWNER_USER_ID" in str(e2.value)

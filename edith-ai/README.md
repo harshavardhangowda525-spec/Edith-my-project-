@@ -8,6 +8,13 @@ document-grounded answers, and a meeting assistant.
 - **Frontend:** React 18 + Vite, liquid-glass UI, animated holographic orb (idle / listening / thinking / speaking).
 - **Data:** Supabase Postgres + Auth with row-level security (in-memory store for local dev).
 
+## Use EDITH anywhere (phone + headphones)
+
+Put EDITH online with one click on Render, with permanent memory in Supabase, then open it on
+your phone from anywhere: **[docs/GO_ONLINE.md](docs/GO_ONLINE.md)** (about 20 minutes, no coding).
+It installs to your home screen, unlocks with your personal EDITH password, and has a big
+**Tap to talk** button.
+
 ## Quick start (Windows)
 
 One command (checks prerequisites, creates venv and `.env` files, installs, runs tests):
@@ -112,7 +119,9 @@ rate limiting, memory & document ownership isolation, memory on/off, consent gat
 
 ## Deployment
 
-Docker: `docker compose up --build` → frontend <http://localhost:8080>, backend <http://localhost:8000>.
+Online (recommended): [`docs/GO_ONLINE.md`](docs/GO_ONLINE.md) uses `render.yaml` and the single-container
+`edith-ai/Dockerfile` (app and API on one URL).
+Docker (two containers): `docker compose up --build` → frontend <http://localhost:8080>, backend <http://localhost:8000>.
 Production (HTTPS, Supabase, CORS): [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
 ## Not yet done in V1

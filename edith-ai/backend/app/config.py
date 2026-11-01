@@ -43,9 +43,13 @@ class Settings(BaseSettings):
     max_audio_bytes: int = 10 * 1024 * 1024
 
     # --- Authentication -------------------------------------------------------
+    # "personal" -> one owner protected by a long secret password (OWNER_ACCESS_TOKEN);
+    #               intended for a single-user online deployment
     # "supabase" -> verify Supabase-issued JWTs (HS256 with the project JWT secret)
     # "local"    -> static bearer tokens from LOCAL_ACCESS_TOKENS (dev only)
-    auth_mode: Literal["supabase", "local"] = "local"
+    auth_mode: Literal["personal", "supabase", "local"] = "local"
+    owner_access_token: str | None = None
+    owner_user_id: str = "00000000-0000-0000-0000-000000000001"
     supabase_url: str | None = None
     supabase_jwt_secret: str | None = None
     supabase_service_role_key: str | None = None
@@ -62,6 +66,10 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 30
     max_request_bytes: int = 1 * 1024 * 1024
     max_message_chars: int = 4000
+
+    # --- Static frontend (single-container deployment) -------------------------
+    # When set and the folder exists, the built React app is served from "/".
+    static_dir: str | None = None
 
     @field_validator("log_level")
     @classmethod

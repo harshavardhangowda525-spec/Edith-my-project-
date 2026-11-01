@@ -1,0 +1,40 @@
+# Render Blueprint: one-click deploy of EDITH AI (app + backend in one service).
+# Render dashboard -> New -> Blueprint -> pick this repository.
+# Values marked "sync: false" are asked for during setup and stay private on Render.
+services:
+  - type: web
+    name: edith-ai
+    runtime: docker
+    plan: free            # free plan sleeps after ~15 min idle; "starter" stays awake
+    dockerfilePath: ./edith-ai/Dockerfile
+    dockerContext: ./edith-ai
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      # --- your EDITH password (generated for you; copy it from the Environment tab) ---
+      - key: AUTH_MODE
+        value: personal
+      - key: OWNER_ACCESS_TOKEN
+        generateValue: true
+      - key: OWNER_USER_ID          # your user's UUID from Supabase -> Authentication -> Users
+        sync: false
+      # --- AI provider ---
+      - key: AI_PROVIDER            # openai | anthropic
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_MODEL               # e.g. gpt-4o-mini or claude-sonnet-5-5
+        sync: false
+      - key: AI_BASE_URL            # https://api.openai.com/v1 or https://api.anthropic.com/v1
+        sync: false
+      # --- permanent memory (Supabase) ---
+      - key: STORAGE_BACKEND
+        value: supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"

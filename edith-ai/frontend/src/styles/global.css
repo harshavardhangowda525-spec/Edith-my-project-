@@ -226,3 +226,27 @@ ul.note { padding-left: 18px; }
   .orb--listening .orb__core, .orb--speaking .orb__core { opacity: 1; }
   .orb--listening .ring--arc, .orb--thinking .ring--arc { stroke-width: 4; }
 }
+
+/* ---------- unlock screen ---------- */
+.unlock { position: relative; z-index: 1; min-height: 100vh; display: grid; place-items: center; padding: 16px; }
+.unlock__card { width: min(400px, 100%); padding: 28px 24px; display: flex; flex-direction: column; gap: 14px; text-align: center; }
+.unlock__card h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.4em; }
+.unlock__mark { width: 40px; height: 40px; border-width: 3px; margin: 0 auto; box-shadow: 0 0 24px var(--blue-glow); }
+.unlock__error { margin: 0; color: var(--bad); font-size: 14px; }
+.unlock__go { padding: 12px; font-size: 16px; }
+
+/* ---------- phone: big one-handed talk button ---------- */
+@media (max-width: 900px) {
+  .orb { --size: min(260px, 62vw); }
+  .stage { gap: 18px; }
+  .controls { width: 100%; }
+  .ptt { width: 100%; max-width: 420px; justify-content: center; padding: 22px 24px; font-size: 18px; min-height: 72px; }
+  .ptt__icon { font-size: 22px; }
+}
+/* installed app (Add to Home screen): respect phone notches */
+@media (display-mode: standalone) {
+  .topbar { padding-top: max(12px, env(safe-area-inset-top)); }
+  .layout { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+}
+
+@media (pointer: coarse) { .desktop-only { display: none; } }

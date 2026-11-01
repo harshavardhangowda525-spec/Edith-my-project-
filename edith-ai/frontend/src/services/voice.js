@@ -46,13 +46,16 @@ export async function probeMicrophone() {
   }
 }
 
-/** Push-to-talk recogniser. Call start() on press, stop() on release. */
-export function createRecognizer({ lang, onInterim, onFinal, onError, onEnd }) {
+/**
+ * Push-to-talk recogniser. Call start() on press, stop() on release.
+ * continuous=false ("tap" mode): recognition ends by itself when you pause speaking.
+ */
+export function createRecognizer({ lang, continuous = true, onInterim, onFinal, onError, onEnd }) {
   if (!SR) return null;
   const rec = new SR();
   rec.lang = lang || 'en-US';
   rec.interimResults = true;
-  rec.continuous = true; // only while the button is held
+  rec.continuous = continuous; // never runs beyond one utterance / the button being held
   rec.maxAlternatives = 1;
   let finalText = '';
   let active = false;
@@ -200,6 +203,15 @@ export function stopSpeaking() {
   if (currentAudio) {
     currentAudio.pause();
     currentAudio.onended?.();
+  }
+}
+
+/** Keep the phone screen on while EDITH is open (where supported). */
+export async function requestWakeLock() {
+  try {
+    return await navigator.wakeLock?.request('screen');
+  } catch {
+    return null;
   }
 }
 

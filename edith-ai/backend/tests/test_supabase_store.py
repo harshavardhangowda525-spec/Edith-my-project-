@@ -38,3 +38,13 @@ def test_database_errors_are_generic() -> None:
     with pytest.raises(Exception) as exc:
         store.list_memories("u1")
     assert "secret detail" not in str(exc.value)
+
+
+@respx.mock
+def test_key_header_formats() -> None:
+    route = respx.get(f"{URL}/rest/v1/memories").mock(return_value=httpx.Response(200, json=[]))
+    SupabaseStore(URL, "eyJhbGciOi.legacy.jwt").list_memories("u1")
+    SupabaseStore(URL, "sb_secret_abc123").list_memories("u1")
+    legacy, new = route.calls[0].request.headers, route.calls[1].request.headers
+    assert legacy["Authorization"] == "Bearer eyJhbGciOi.legacy.jwt"
+    assert new["apikey"] == "sb_secret_abc123" and "Authorization" not in new

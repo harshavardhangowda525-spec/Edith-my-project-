@@ -3,6 +3,7 @@ import VoiceOrb from './components/VoiceOrb.jsx';
 import ChatPanel from './components/ChatPanel.jsx';
 import DeviceStatus from './components/DeviceStatus.jsx';
 import SettingsPanel from './components/SettingsPanel.jsx';
+import UnlockScreen from './components/UnlockScreen.jsx';
 import { createApi, loadSettings, saveSettings } from './services/api.js';
 import {
   createClipRecorder,
@@ -11,6 +12,7 @@ import {
   probeMicrophone,
   recognitionSupported,
   recorderSupported,
+  requestWakeLock,
   speak,
   stopSpeaking,
   synthesisSupported,
@@ -35,6 +37,8 @@ export default function App() {
   const [mic, setMic] = useState({ status: 'unknown' });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [unlockError, setUnlockError] = useState('');
+  const [unlocking, setUnlocking] = useState(false);
 
   const recognizerRef = useRef(null);
   const recorderRef = useRef(null);
@@ -52,9 +56,52 @@ export default function App() {
   }, [toast]);
 
   function updateSettings(next) {
+    settingsRef.current = next;
     setSettings(next);
     saveSettings(next);
   }
+
+  const lock = useCallback((reason) => {
+    const next = { ...settingsRef.current, accessToken: '' };
+    settingsRef.current = next;
+    setSettings(next);
+    saveSettings(next);
+    setUnlockError(reason || '');
+  }, []);
+
+  // Password gate (personal/local auth). Supabase mode signs in from Settings instead.
+  const needsUnlock = Boolean(health) && health.auth_mode !== 'supabase' && !settings.accessToken;
+
+  async function unlock(password) {
+    setUnlocking(true);
+    setUnlockError('');
+    const previous = settingsRef.current;
+    settingsRef.current = { ...previous, accessToken: password };
+    try {
+      await api.getMemorySettings(); // cheap authenticated call to verify the password
+      updateSettings({ ...previous, accessToken: password });
+    } catch (e) {
+      settingsRef.current = previous;
+      setUnlockError(e.status === 401 ? 'That password is not correct.' : e.message);
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  // Optionally keep the screen awake while EDITH is open (re-acquired when returning to the tab).
+  useEffect(() => {
+    if (!settings.keepAwake) return undefined;
+    let lockRef = null;
+    const acquire = async () => {
+      if (document.visibilityState === 'visible') lockRef = await requestWakeLock();
+    };
+    acquire();
+    document.addEventListener('visibilitychange', acquire);
+    return () => {
+      document.removeEventListener('visibilitychange', acquire);
+      lockRef?.release?.().catch(() => {});
+    };
+  }, [settings.keepAwake]);
 
   // --- backend health polling ---
   useEffect(() => {
@@ -126,12 +173,15 @@ export default function App() {
       setMessages((ms) => [...ms, { id: uid(), role: 'assistant', content: r.reply, sources: r.sources, mock: r.mock }]);
       say(r.reply);
     } catch (e) {
-      const hint = e.status === 401 ? ' Add your access token in Settings → General.' : '';
+      if (e.status === 401 && settingsRef.current.accessToken && health?.auth_mode !== 'supabase') {
+        lock('Your saved password was rejected. Please enter it again.');
+      }
+      const hint = e.status === 401 ? ' Sign in again to continue.' : '';
       const msg = /[.!?]$/.test(e.message) ? e.message : `${e.message}.`;
       setMessages((ms) => [...ms, { id: uid(), role: 'assistant', content: msg + hint, error: true }]);
       setState('idle');
     }
-  }, [api, say]);
+  }, [api, say, lock, health]);
 
   // --- push-to-talk ---
   const pttStart = useCallback(async () => {
@@ -142,6 +192,7 @@ export default function App() {
       if (!recognizerRef.current) {
         recognizerRef.current = createRecognizer({
           lang: s.language,
+          continuous: s.talkMode !== 'tap',
           onInterim: setInterim,
           onFinal: (t) => {
             setInterim('');
@@ -201,11 +252,11 @@ export default function App() {
     }
   }, [api, send, notify]);
 
-  // Rebuild the recogniser when the language changes.
+  // Rebuild the recogniser when the language or talk mode changes.
   useEffect(() => {
     recognizerRef.current?.abort();
     recognizerRef.current = null;
-  }, [settings.language]);
+  }, [settings.language, settings.talkMode, send]);
 
   // Space bar = push-to-talk (when not typing).
   useEffect(() => {
@@ -245,6 +296,30 @@ export default function App() {
   }
 
   const listening = state === 'listening';
+  const tapMode = settings.talkMode === 'tap';
+  const talkHandlers = tapMode
+    ? { onClick: () => (listening ? pttEnd() : pttStart()) }
+    : {
+        onPointerDown: (e) => {
+          e.currentTarget.setPointerCapture?.(e.pointerId);
+          pttStart();
+        },
+        onPointerUp: pttEnd,
+        onPointerCancel: pttEnd,
+        onKeyDown: (e) => e.key === 'Enter' && !e.repeat && pttStart(),
+        onKeyUp: (e) => e.key === 'Enter' && pttEnd(),
+      };
+  const talkLabel = tapMode ? (listening ? 'Listening… tap to send' : 'Tap to talk')
+    : (listening ? 'Release to send' : 'Hold to talk');
+
+  if (needsUnlock) {
+    return (
+      <div className="app">
+        <div className="bg-grid" aria-hidden="true" />
+        <UnlockScreen onUnlock={unlock} error={unlockError} checking={unlocking} />
+      </div>
+    );
+  }
 
   return (
     <div className="app">
@@ -261,7 +336,7 @@ export default function App() {
       {health?.mock_mode && (
         <div className="banner" role="status">
           Mock mode: no AI provider is connected, replies are placeholders. Set <code>AI_PROVIDER</code> and{' '}
-          <code>AI_API_KEY</code> in <code>backend/.env</code>.
+          <code>AI_API_KEY</code> on the server (Render → Environment, or <code>backend/.env</code> locally).
         </div>
       )}
 
@@ -271,21 +346,14 @@ export default function App() {
           <div className="controls">
             <button
               className={`ptt ${listening ? 'ptt--on' : ''}`}
-              onPointerDown={(e) => {
-                e.currentTarget.setPointerCapture?.(e.pointerId);
-                pttStart();
-              }}
-              onPointerUp={pttEnd}
-              onPointerCancel={pttEnd}
-              onKeyDown={(e) => (e.key === 'Enter' && !e.repeat) && pttStart()}
-              onKeyUp={(e) => e.key === 'Enter' && pttEnd()}
+              {...talkHandlers}
               onContextMenu={(e) => e.preventDefault()}
               aria-pressed={listening}
-              aria-label="Hold to talk"
+              aria-label={talkLabel}
               disabled={state === 'thinking'}
             >
               <span className="ptt__icon" aria-hidden="true">🎙</span>
-              {listening ? 'Release to send' : 'Hold to talk'}
+              {talkLabel}
             </button>
             {state === 'speaking' && (
               <button className="btn" onClick={() => { stopSpeaking(); setState('idle'); }}>Stop speaking</button>

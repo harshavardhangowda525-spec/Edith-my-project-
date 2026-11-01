@@ -92,11 +92,18 @@ function General({ settings, set, health, notify }) {
           </div>
         </form>
       ) : (
-        <Field label="Access token"
-          hint="Your personal token from LOCAL_ACCESS_TOKENS (dev) or a Supabase access token. Stored only in this browser.">
-          <input type="password" value={settings.accessToken} autoComplete="off"
-            onChange={(e) => set({ accessToken: e.target.value.trim() })} />
-        </Field>
+        <div className="stack">
+          <span className="field__label">EDITH password</span>
+          <p className="field__hint">
+            {settings.accessToken ? 'This device is unlocked. The password is stored only on this device.'
+              : 'Not set.'}
+          </p>
+          {settings.accessToken && (
+            <button type="button" className="btn" onClick={() => set({ accessToken: '' })}>
+              Lock this device
+            </button>
+          )}
+        </div>
       )}
       <Field label="AI model" hint="Leave blank for the server default. Only server-allowed models are accepted.">
         <input value={settings.model} placeholder="server default" onChange={(e) => set({ model: e.target.value.trim() })} />
@@ -125,6 +132,18 @@ function Voice({ settings, set, health }) {
   }, []);
   return (
     <>
+      <Field label="Talk button"
+        hint="Tap: tap once, speak, and EDITH sends when you pause. Hold: hold while speaking.">
+        <select value={settings.talkMode} onChange={(e) => set({ talkMode: e.target.value })}>
+          <option value="tap">Tap to talk (best on phones)</option>
+          <option value="hold">Hold to talk</option>
+        </select>
+      </Field>
+      <label className="check">
+        <input type="checkbox" checked={settings.keepAwake} onChange={(e) => set({ keepAwake: e.target.checked })}
+          disabled={!('wakeLock' in navigator)} />
+        Keep screen on while EDITH is open {!('wakeLock' in navigator) && '(not supported in this browser)'}
+      </label>
       <Field label="Voice">
         <select value={settings.voiceName} onChange={(e) => set({ voiceName: e.target.value })}>
           <option value="">System default</option>

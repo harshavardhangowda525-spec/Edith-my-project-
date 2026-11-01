@@ -6,17 +6,20 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api import chat, documents, health, meeting, memory, voice
 from app.config import Settings, get_settings
 from app.errors import AppError
+from app.security.authentication import personal_mode_problem
 from app.security.rate_limit import RateLimiter
 from app.services.ai_service import AIService
 from app.services.memory_service import MemoryService
@@ -132,6 +135,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     if settings.is_mock:
         log.warning("AI_PROVIDER=mock - responses are canned and NOT from a real AI model")
+    if settings.auth_mode == "personal" and (problem := personal_mode_problem(settings)):
+        log.error("AUTH_MODE=personal misconfigured: %s", problem)
     if settings.auth_mode == "local" and not settings.local_token_map:
         log.warning("AUTH_MODE=local but LOCAL_ACCESS_TOKENS is empty - private endpoints will reject all requests")
 
@@ -153,6 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "microphone=(self), camera=(), geolocation=()")
         if is_prod:
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return response
@@ -185,6 +191,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     for r in (health.router, chat.router, voice.router, memory.router, documents.router, meeting.router):
         app.include_router(r)
+
+    # Serve the built React app from the same origin (single-container deployment).
+    # Mounted last so every API route above takes precedence.
+    if settings.static_dir:
+        static = Path(settings.static_dir)
+        if (static / "index.html").is_file():
+            app.mount("/", StaticFiles(directory=static, html=True), name="frontend")
+            log.info("Serving frontend from %s", static)
+        else:
+            log.warning("STATIC_DIR=%s has no index.html - frontend not served", static)
 
     return app
 

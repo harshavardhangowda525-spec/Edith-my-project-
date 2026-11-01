@@ -17,7 +17,20 @@ See the README quick start, or run `scripts\setup.ps1 -Start`.
    Pair the earbuds with the phone; Android routes Chrome's mic/speaker to them automatically
    when connected.
 
-## Docker
+## Render (one click)
+
+`render.yaml` at the repository root deploys the single-container image (`edith-ai/Dockerfile`):
+the React app is built and served by FastAPI, so the app and API share one HTTPS origin.
+Step-by-step: [GO_ONLINE.md](GO_ONLINE.md).
+
+The same image runs on any Docker host:
+
+```bash
+docker build -t edith-ai ./edith-ai
+docker run -p 8000:8000 --env-file edith-ai/backend/.env edith-ai
+```
+
+## Docker Compose (separate frontend/backend)
 
 ```powershell
 cd edith-ai

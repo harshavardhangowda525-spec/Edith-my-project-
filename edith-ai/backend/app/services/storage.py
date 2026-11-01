@@ -159,15 +159,13 @@ class SupabaseStore:
             raise ConfigurationError(
                 "STORAGE_BACKEND=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
             )
-        self._client = httpx.Client(
-            base_url=url.rstrip("/") + "/rest/v1",
-            headers={
-                "apikey": service_key,
-                "Authorization": f"Bearer {service_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=timeout,
-        )
+        headers = {"apikey": service_key, "Content-Type": "application/json"}
+        # Legacy service_role keys are JWTs and also go in Authorization. Newer
+        # "sb_secret_..." keys are not JWTs and are sent in the apikey header only.
+        if service_key.startswith("eyJ"):
+            headers["Authorization"] = f"Bearer {service_key}"
+        self._client = httpx.Client(base_url=url.rstrip("/") + "/rest/v1", headers=headers,
+                                    timeout=timeout)
 
     def _req(self, method: str, path: str, **kw: Any) -> Any:
         try:

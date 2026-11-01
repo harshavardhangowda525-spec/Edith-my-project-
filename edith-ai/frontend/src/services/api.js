@@ -3,8 +3,15 @@
 
 const STORAGE_KEY = 'edith.settings.v1';
 
+// VITE_API_URL wins when set. Otherwise: dev server -> local backend; production
+// build -> same origin (the backend serves the app in the single-container deploy).
+const defaultApiUrl =
+  import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
+
+const isTouch = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
+
 const defaults = {
-  apiUrl: import.meta.env.VITE_API_URL || 'http://localhost:8000',
+  apiUrl: defaultApiUrl,
   accessToken: '',
   model: '',
   mode: 'earbud',
@@ -15,6 +22,8 @@ const defaults = {
   useMemory: true,
   useDocuments: true,
   serverSpeech: false,
+  talkMode: isTouch ? 'tap' : 'hold', // tap: tap once, speak, it sends when you pause
+  keepAwake: false,
 };
 
 export function loadSettings() {
@@ -60,7 +69,7 @@ export function createApi(getSettings) {
       });
     } catch (e) {
       if (e.name === 'AbortError') throw new ApiError(0, 'timeout', 'The request timed out.');
-      throw new ApiError(0, 'network', `Cannot reach the EDITH backend at ${apiUrl}.`);
+      throw new ApiError(0, 'network', `Cannot reach the EDITH server${apiUrl ? ` at ${apiUrl}` : ''}. Check your internet connection.`);
     } finally {
       clearTimeout(timer);
     }

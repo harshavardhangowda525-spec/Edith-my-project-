@@ -30,7 +30,7 @@ export default function ChatPanel({ messages, onSend, busy, interim, onRemember,
       <ol className="chat__log" aria-live="polite">
         {messages.length === 0 && !interim && (
           <li className="chat__empty">
-            Hold the button (or <kbd>Space</kbd>) and speak, or type below.
+            Press the talk button<span className="desktop-only"> (or <kbd>Space</kbd>)</span> and speak, or type below.
             <br />Conversations are not saved unless you choose “Remember”.
           </li>
         )}

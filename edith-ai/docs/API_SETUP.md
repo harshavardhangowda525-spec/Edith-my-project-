@@ -75,6 +75,18 @@ Generate a token: `py -c "import secrets;print(secrets.token_urlsafe(32))"`.
 Paste the token into *Settings → General → Access token*. Multiple users:
 `tokenA:uuidA,tokenB:uuidB`. Local mode is **refused** when `ENVIRONMENT=production`.
 
+### Personal password (single owner, online)
+
+Used by the Render deployment ([GO_ONLINE.md](GO_ONLINE.md)):
+
+```env
+AUTH_MODE=personal
+OWNER_ACCESS_TOKEN=<at least 24 random characters>
+OWNER_USER_ID=<your user's UUID from Supabase -> Authentication -> Users>
+```
+
+Allowed in production. The app shows an unlock screen and stores the password only on that device.
+
 ### Supabase Auth
 
 1. Create a project at <https://supabase.com>.

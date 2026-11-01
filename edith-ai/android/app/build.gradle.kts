@@ -72,6 +72,21 @@ android {
         }
     }
 
+    buildFeatures { buildConfig = true }
+    flavorDimensions += "edition"
+    productFlavors {
+        // Installs from the phone (no Accessibility service: Play Protect allows it).
+        create("standard") {
+            dimension = "edition"
+            buildConfigField("boolean", "WHATSAPP_AUTO_SEND", "false")
+        }
+        // Adds WhatsApp auto-send (Accessibility). Install from a computer with adb.
+        create("full") {
+            dimension = "edition"
+            buildConfigField("boolean", "WHATSAPP_AUTO_SEND", "true")
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false

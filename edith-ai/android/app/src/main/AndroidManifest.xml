@@ -73,19 +73,6 @@
         </activity>
 
         <service
-            android:name=".WhatsAppSender"
-            android:exported="true"
-            android:label="@string/whatsapp_sender_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/whatsapp_sender" />
-        </service>
-
-        <service
             android:name=".EdithService"
             android:exported="false"
             android:foregroundServiceType="microphone" />

@@ -95,6 +95,17 @@ class MainActivity : AppCompatActivity() {
             else startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
         findViewById<Button>(R.id.allowWhatsApp).setOnClickListener {
+            if (!BuildConfig.WHATSAPP_AUTO_SEND) {
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("WhatsApp auto-send")
+                    .setMessage("This edition types the WhatsApp message for you and you tap Send.\n\n" +
+                        "Pressing Send automatically needs the \"full\" edition. Google Play Protect blocks " +
+                        "installing it from the phone (it uses Accessibility), so it has to be installed from a " +
+                        "computer: see docs/LEADS_AND_EMAIL.md → WhatsApp.")
+                    .setPositiveButton("OK", null)
+                    .show()
+                return@setOnClickListener
+            }
             if (WhatsAppSender.isEnabled(this)) { toast("Already allowed ✓"); return@setOnClickListener }
             androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle("WhatsApp auto-send")
@@ -160,7 +171,11 @@ class MainActivity : AppCompatActivity() {
             EdithState.actionLog.joinToString("\n").ifBlank { "Nothing yet" }
         findViewById<TextView>(R.id.phoneStatus).text =
             "Calls: ${if (calls) "✓ allowed" else "off"}   ·   Open apps & music: ${if (apps) "✓ allowed" else "off"}" +
-                "   ·   WhatsApp auto-send: ${if (WhatsAppSender.isEnabled(this)) "✓ on" else "off"}"
+                "   ·   WhatsApp auto-send: ${when {
+                    !BuildConfig.WHATSAPP_AUTO_SEND -> "full edition only"
+                    WhatsAppSender.isEnabled(this) -> "✓ on"
+                    else -> "off"
+                }}"
         if (EdithState.running) {
             // 0-10 bars on a log scale: lets you see whether EDITH hears anything at all.
             val bars = (kotlin.math.ln(EdithState.micLevel + 1) / kotlin.math.ln(4000.0) * 10).toInt().coerceIn(0, 10)

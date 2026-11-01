@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  "full" edition only: WhatsApp auto-send uses an Accessibility service. Google Play Protect's
+  fraud protection (e.g. India) blocks installing such apps from a browser/file manager, so this
+  edition is meant to be installed from a computer with `adb install`. The standard edition
+  leaves it out and installs normally from the phone.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service
+            android:name=".WhatsAppSender"
+            android:exported="true"
+            android:label="@string/whatsapp_sender_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/whatsapp_sender" />
+        </service>
+    </application>
+</manifest>

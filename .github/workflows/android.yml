@@ -31,8 +31,9 @@ jobs:
       - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon testReleaseUnitTest assembleRelease
-          cp app/build/outputs/apk/release/app-release.apk "EDITH-${GITHUB_RUN_NUMBER}.apk"
+          ./gradlew --no-daemon testStandardReleaseUnitTest assembleStandardRelease assembleFullRelease
+          cp app/build/outputs/apk/standard/release/app-standard-release.apk "EDITH-${GITHUB_RUN_NUMBER}.apk"
+          cp app/build/outputs/apk/full/release/app-full-release.apk "EDITH-${GITHUB_RUN_NUMBER}-full-install-from-PC.apk"
 
       - name: Keep the APK as a build artifact
         uses: actions/upload-artifact@v4
@@ -49,7 +50,11 @@ jobs:
           make_latest: true
           files: edith-ai/android/EDITH-*.apk
           body: |
-            Install on your Android phone:
-            1. Open this page on the phone and tap the **EDITH-${{ github.run_number }}.apk** file below.
-            2. Allow "Install unknown apps" for your browser when asked, then tap **Install**.
+            **Install on your phone:** open this page on the phone and tap **EDITH-${{ github.run_number }}.apk**.
+            Allow "Install unknown apps" for your browser when asked, then tap **Install**.
+
+            **EDITH-${{ github.run_number }}-full-install-from-PC.apk** adds WhatsApp auto-send. Google Play Protect
+            blocks installing it from the phone (it uses Accessibility), so install it from a computer with
+            `adb install -r <file>` (see edith-ai/docs/LEADS_AND_EMAIL.md). Most people only need the first file.
+
             Setup guide: edith-ai/docs/ANDROID_APP.md

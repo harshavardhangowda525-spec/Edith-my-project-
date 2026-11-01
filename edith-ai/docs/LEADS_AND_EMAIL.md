@@ -69,7 +69,36 @@ saying …". To stop EDITH sending email at any time, delete the App password on
 EDITH reads it back. Say **yes** and it opens Rahul's chat with the text typed. With **WhatsApp
 auto-send** on, it also presses Send.
 
-Turn on auto-send in the EDITH app (section 4 → **Allow WhatsApp auto-send**):
+### Two editions (because of Google Play Protect)
+
+Google Play Protect's fraud protection (rolled out in India and other countries) **blocks installing
+apps from a browser or file manager if they use Accessibility**. Auto-send needs Accessibility, so:
+
+| File on the Releases page | Install from | WhatsApp |
+|---|---|---|
+| `EDITH-N.apk` (**normal**, recommended) | your phone, as usual | EDITH types the message, **you tap Send** |
+| `EDITH-N-full-install-from-PC.apk` | a computer with a USB cable | EDITH also **presses Send** |
+
+Both share the same settings, and either one installs over the other. Don't turn off Play Protect
+to get around the block.
+
+**Installing the full edition from a Windows PC (about 10 minutes, once):**
+1. Phone: **Settings → About phone** → tap **Build number** 7 times → enter your PIN. "Developer
+   options" is now on.
+2. **Settings → System → Developer options** → turn on **USB debugging**. On Xiaomi/Redmi/POCO also
+   turn on **Install via USB** (it may ask you to sign in to a Mi account).
+3. PC: download **SDK Platform-Tools for Windows** from
+   <https://developer.android.com/tools/releases/platform-tools> and unzip it, e.g. to `C:\platform-tools`.
+4. Download `EDITH-N-full-install-from-PC.apk` to the PC (e.g. into `C:\platform-tools`).
+5. Connect the phone by USB → on the phone tap **Allow USB debugging**.
+6. In that folder, Shift + right-click → **Open in Terminal / PowerShell**, then run:
+   ```powershell
+   .\adb devices
+   .\adb install -r EDITH-N-full-install-from-PC.apk
+   ```
+   (Replace `N` with the build number.) `Success` means it's installed. You can turn USB debugging off again.
+
+Then turn on auto-send in the EDITH app (section 4 → **Allow WhatsApp auto-send**):
 1. Read the explanation → **Continue** → **Installed apps / Downloaded apps** → **EDITH WhatsApp
    auto-send** → turn on.
 2. If Android says **"Restricted setting"**: tap **Open EDITH App info** → **⋮** (top right) →

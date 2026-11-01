@@ -112,20 +112,31 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
         return matchContacts(spoken, all)
     }
 
+    /** Places the call directly (needs the Phone permission); otherwise opens the dialer. */
     @SuppressLint("MissingPermission")
     fun placeCall(contact: Contact): String? {
-        val uri = Uri.fromParts("tel", contact.number, null)
-        return if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED) {
-            try {
-                ctx.getSystemService(TelecomManager::class.java).placeCall(uri, Bundle())
-                null
-            } catch (e: SecurityException) {
-                launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
-            }
-        } else {
+        val number = contact.number.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+        if (number.isBlank()) return "${contact.name} has no phone number saved."
+        val uri = Uri.fromParts("tel", number, null)
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CALL_PHONE) != PackageManager.PERMISSION_GRANTED) {
+            EdithState.log("Call ${contact.name}: Phone permission off – opening dialer")
+            return launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
+                ?: "I opened the dialer. Turn on Allow calls in EDITH so I can call directly."
+        }
+        return try {
+            ctx.getSystemService(TelecomManager::class.java).placeCall(uri, Bundle())
+            EdithState.log("Calling ${contact.name} (${mask(number)})")
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "placeCall failed", e)
+            EdithState.log("Call ${contact.name} failed: ${e.javaClass.simpleName}: ${e.message}")
+            // Fall back to the dialer with the number filled in.
             launch(Intent(Intent.ACTION_DIAL, uri), "the dialer")
+                ?: "I couldn't start the call directly, so I opened the dialer. Press call."
         }
     }
+
+    private fun mask(n: String) = if (n.length > 4) "…" + n.takeLast(4) else n
 
     // ------------------------------------------------------------------ apps
 
@@ -213,35 +224,70 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
      */
     fun launch(intent: Intent, what: String): String? {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (canOpenAppsInBackground(ctx)) {
-            val done = CountDownLatch(1)
-            var error: String? = null
-            Handler(Looper.getMainLooper()).post {
-                // Android 15 requires a visible overlay window for background starts: show a 1-pixel one briefly.
-                val wm = ctx.getSystemService(WindowManager::class.java)
-                val view = View(ctx)
-                val params = WindowManager.LayoutParams(
-                    1, 1, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
-                    PixelFormat.TRANSLUCENT,
-                )
-                val added = runCatching { wm.addView(view, params) }.isSuccess
+        if (!canOpenAppsInBackground(ctx)) {
+            showTapToOpen(intent, what)
+            EdithState.log("Open $what: needs 'Display over other apps' – showed tap-to-open")
+            return "Tap the notification to open $what. To skip this step, allow EDITH to display over other apps."
+        }
+        val main = Handler(Looper.getMainLooper())
+        val done = CountDownLatch(1)
+        var error: String? = null
+        main.post {
+            // Android only lets a background app open another app while it shows a VISIBLE window.
+            // Add a tiny, almost transparent overlay, wait until it has really been drawn, then launch.
+            val wm = ctx.getSystemService(WindowManager::class.java)
+            val view = View(ctx).apply { setBackgroundColor(0x01000000) }
+            val params = WindowManager.LayoutParams(
+                2, 2, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT,
+            ).apply { gravity = android.view.Gravity.TOP or android.view.Gravity.START }
+            val added = runCatching { wm.addView(view, params) }
+                .onFailure { Log.w(TAG, "overlay failed", it) }.isSuccess
+            val start = Runnable {
                 try {
-                    ctx.startActivity(intent)
+                    startWithBackgroundPermission(intent)
+                    EdithState.log("Opened $what")
                 } catch (e: ActivityNotFoundException) {
                     error = "I couldn't find an app to open $what."
                 } catch (e: Exception) {
-                    Log.w(TAG, "startActivity failed", e)
-                    error = "Android blocked opening $what."
+                    Log.w(TAG, "launch failed", e)
+                    error = "Android blocked opening $what (${e.javaClass.simpleName})."
                 }
-                if (added) Handler(Looper.getMainLooper()).postDelayed({ runCatching { wm.removeView(view) } }, 1500)
+                error?.let { EdithState.log("Open $what failed: $it") }
+                if (added) main.postDelayed({ runCatching { wm.removeView(view) } }, 2500)
                 done.countDown()
             }
-            done.await(3, TimeUnit.SECONDS)
-            return error
+            // Wait for the overlay's first frame (or 400 ms at most).
+            if (added) {
+                var fired = false
+                val fire = { if (!fired) { fired = true; main.postDelayed(start, 120) } }
+                view.viewTreeObserver.addOnDrawListener { main.post { fire() } }
+                main.postDelayed({ fire() }, 400)
+            } else {
+                start.run()
+            }
         }
-        showTapToOpen(intent, what)
-        return "Tap the notification to open $what. To skip this step, allow EDITH to display over other apps."
+        done.await(4, TimeUnit.SECONDS)
+        return error
+    }
+
+    /** Android 14+: explicitly let our "display over other apps" permission cover this launch. */
+    private fun startWithBackgroundPermission(intent: Intent) {
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            val pi = PendingIntent.getActivity(ctx, intent.hashCode(), intent,
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            val options = android.app.ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(
+                android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+            try {
+                pi.send(ctx, 0, null, null, null, null, options.toBundle())
+                return
+            } catch (e: PendingIntent.CanceledException) {
+                Log.w(TAG, "PendingIntent launch cancelled, trying startActivity", e)
+            }
+        }
+        ctx.startActivity(intent)
     }
 
     private fun showTapToOpen(intent: Intent, what: String) {

@@ -147,6 +147,19 @@
             style="@style/SmallButton"
             android:text="Allow opening apps &amp; music (display over other apps)" />
 
+        <Button
+            android:id="@+id/brandPopups"
+            style="@style/SmallButton"
+            android:text="Xiaomi / Redmi / POCO / Oppo / Vivo / Realme: allow pop-ups from background" />
+
+        <TextView style="@style/Label" android:text="Recent actions" />
+        <TextView
+            android:id="@+id/actionLog"
+            style="@style/Hint"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:text="Nothing yet" />
+
         <TextView style="@style/Label" android:text="My favourite music" />
         <EditText
             android:id="@+id/favoriteMusic"

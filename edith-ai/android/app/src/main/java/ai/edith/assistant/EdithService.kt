@@ -54,6 +54,15 @@ object EdithState {
     /** Meeting mode: answer questions heard in the room automatically (user-confirmed consent). */
     @Volatile var meetingMode = false
     @Volatile var lastHeard = ""
+    /** Recent actions and their result (shown in the app; helps find problems). */
+    val actionLog = java.util.concurrent.CopyOnWriteArrayList<String>()
+
+    fun log(line: String) {
+        val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        actionLog.add(0, "$t  $line")
+        while (actionLog.size > 8) actionLog.removeAt(actionLog.size - 1)
+        main.post { listeners.toList().forEach { it() } }
+    }
     private val main = Handler(Looper.getMainLooper())
     private val listeners = mutableSetOf<() -> Unit>()
 
@@ -83,6 +92,9 @@ class EdithService : Service() {
     private val running = AtomicBoolean(false)
     private val askNow = AtomicBoolean(false)
     private val cancelCall = AtomicBoolean(false)
+    /** While set (epoch ms), the listener keeps the microphone closed – e.g. while a call starts. */
+    @Volatile private var holdMicUntil = 0L
+    @Volatile private var currentMic: Mic? = null
     private val audioManager by lazy { getSystemService(AudioManager::class.java) }
     private var worker: Thread? = null
     private var tts: TextToSpeech? = null
@@ -174,6 +186,7 @@ class EdithService : Service() {
             var meeting = EdithState.meetingMode
             var current: Mic = openMic(prefs, phoneOnly = meeting) ?: return
             mic = current
+            currentMic = current
             fun statusText(m: Mic) = if (meeting) "Meeting mode: listening for questions (${m.name})"
             else "Listening for \"Edith\" (${m.name})"
             var listening = statusText(current)
@@ -186,15 +199,20 @@ class EdithService : Service() {
             var frameCount = 0
             while (running.get()) {
                 // 0) Give the microphone to phone/WhatsApp calls; resume afterwards.
-                if (inPhoneCall()) {
+                if (inPhoneCall() || System.currentTimeMillis() < holdMicUntil) {
                     current.close()
                     mic = null
+                    currentMic = null
+                    conversationUntil = 0
                     setStatus("Paused during your call")
-                    while (running.get() && inPhoneCall()) Thread.sleep(1000)
+                    while (running.get() && (inPhoneCall() || System.currentTimeMillis() < holdMicUntil)) {
+                        Thread.sleep(500)
+                    }
                     if (!running.get()) break
                     Thread.sleep(800)
                     current = openMic(prefs, phoneOnly = meeting) ?: return
                     mic = current
+                    currentMic = current
                     recognizer.reset()
                     seg.reset()
                     setStatus(listening)
@@ -209,6 +227,7 @@ class EdithService : Service() {
                         Thread.sleep(300)
                         current = openMic(prefs, phoneOnly = meeting) ?: return
                         mic = current
+                    currentMic = current
                         listening = statusText(current)
                         setStatus(listening)
                         recognizer.reset()
@@ -225,6 +244,7 @@ class EdithService : Service() {
                     mic = null
                     current = openMic(prefs, phoneOnly = meeting) ?: return
                     mic = current
+                    currentMic = current
                     listening = statusText(current)
                     setStatus(listening)
                     recognizer.reset()
@@ -590,6 +610,7 @@ class EdithService : Service() {
         val actions = PhoneActions(this, prefs)
         return when (val plan = actions.plan(action, say)) {
             is PhoneActions.Plan.Fail -> {
+                EdithState.log("${action.optString("type")}: ${plan.say}")
                 EdithState.update(answer = "⚠ ${plan.say}")
                 speak(plan.say)
                 plan.say
@@ -598,6 +619,7 @@ class EdithService : Service() {
                 EdithState.update(answer = plan.say.ifBlank { "✓ ${say}" })
                 if (!plan.sayAfter && plan.say.isNotBlank()) speak(plan.say)
                 val problem = plan.run()
+                if (problem == null) EdithState.log("${action.optString("type")}: done – ${plan.say.ifBlank { say }}")
                 if (plan.sayAfter && plan.say.isNotBlank()) speak(plan.say)
                 problem?.let { EdithState.update(answer = "⚠ $it"); speak(it) }
                 problem ?: plan.say
@@ -613,13 +635,15 @@ class EdithService : Service() {
                 while (System.currentTimeMillis() < deadline && !cancelCall.get() && running.get()) Thread.sleep(100)
                 updateNotification("Listening…")
                 if (cancelCall.get() || !running.get()) {
+                    EdithState.log("Call to $name cancelled")
                     EdithState.update(answer = "Call to $name cancelled.")
                     speak("Cancelled.")
                     "Call cancelled."
                 } else {
+                    releaseMicForCall()
                     val problem = actions.placeCall(plan.contact)
                     problem?.let { speak(it) }
-                    "Calling $name."
+                    problem ?: "Calling $name."
                 }
             }
         }
@@ -637,6 +661,24 @@ class EdithService : Service() {
                 .setOngoing(true)
                 .addAction(0, "Cancel call", cancel)
                 .build())
+    }
+
+    /**
+     * Frees the microphone and Bluetooth "call mode" so the phone call can use them.
+     * The listener stays paused while the call is starting and while it lasts.
+     */
+    private fun releaseMicForCall() {
+        holdMicUntil = System.currentTimeMillis() + 15_000
+        if (Thread.currentThread() === worker) {
+            currentMic?.close()
+            currentMic = null
+        } else {
+            // Conversation mode: the listener thread closes it on its next frame.
+            val until = System.currentTimeMillis() + 1500
+            while (currentMic != null && System.currentTimeMillis() < until) Thread.sleep(50)
+        }
+        routing.release()
+        Thread.sleep(300)
     }
 
     /** True while a phone/VoIP call is active: EDITH must not take the microphone. */

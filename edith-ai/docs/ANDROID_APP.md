@@ -113,6 +113,11 @@ Good to know:
   instead of guessing. "Mom", "Mummy", "Amma", "Papa", "Dad", "Appa", etc. are understood.
 * EDITH pauses listening during phone and WhatsApp calls, and resumes afterwards.
 * On a locked phone, music, calls, alarms and timers work; apps you open appear after you unlock.
+* **Xiaomi / Redmi / POCO / Oppo / Vivo / Realme:** these phones have an extra switch. Tap the
+  button in section 4, then *Other permissions* → allow **Display pop-up windows while running in
+  the background**. Without it, apps won't open while you're in another app.
+* **Recent actions** (section 4) lists what EDITH tried and whether it worked. Send it to me if a
+  call or app launch fails.
 * EDITH can't tap buttons inside other apps or read your screen. That would need full
   screen access, which we deliberately don't use.
 

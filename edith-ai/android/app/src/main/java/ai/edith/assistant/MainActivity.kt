@@ -92,6 +92,10 @@ class MainActivity : AppCompatActivity() {
             if (Settings.canDrawOverlays(this)) toast("Already allowed ✓")
             else startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
+        findViewById<Button>(R.id.brandPopups).setOnClickListener {
+            toast("Open “Other permissions” (or “Permissions”) → allow “Display pop-up windows while running in the background” and “Display pop-up windows”.")
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
         bindText(R.id.favoriteMusic, prefs.favoriteMusic) { prefs.favoriteMusic = it }
         findViewById<RadioGroup>(R.id.musicApp).apply {
             check(when (prefs.musicApp) { "youtube_music" -> R.id.musicYtMusic; "jiosaavn" -> R.id.musicJioSaavn; else -> R.id.musicSpotify })
@@ -130,6 +134,8 @@ class MainActivity : AppCompatActivity() {
         val calls = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val apps = Settings.canDrawOverlays(this)
+        findViewById<TextView>(R.id.actionLog).text =
+            EdithState.actionLog.joinToString("\n").ifBlank { "Nothing yet" }
         findViewById<TextView>(R.id.phoneStatus).text =
             "Calls: ${if (calls) "✓ allowed" else "off"}   ·   Open apps & music: ${if (apps) "✓ allowed" else "off"}"
         if (EdithState.running) {

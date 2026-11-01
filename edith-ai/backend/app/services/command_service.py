@@ -44,7 +44,8 @@ NUMBER_WORDS = {
 }
 COMMAND_HINTS = re.compile(
     r"\b(call|phone|ring|dial|open|launch|start|play|pause|stop|resume|skip|next|previous|volume|"
-    r"louder|quieter|mute|alarm|wake me|timer|navigate|directions|take me|drive me|music|song)\b"
+    r"louder|quieter|mute|alarm|wake me|timer|navigate|directions|take me|drive me|music|song|"
+    r"leads?|prospects?|e-?mail|mail|whatsapp|message|text)\b"
 )
 _LEADING = re.compile(
     r"^(?:(?:hey|ok|okay)\s+)?(?:edith[\s,]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?"
@@ -79,16 +80,79 @@ def _music_app(text: str) -> tuple[str, str | None]:
 
 
 def _play(query: str, app: str | None) -> dict[str, Any]:
-    query = query.strip()
+    query = re.sub(r"^(?:the\s+)?(?:song|track)\s+", "", query.strip())
     favourite = not query or bool(FAVOURITE_WORDS.match(query))
-    return {"type": "play_music", "query": "" if favourite else query, "favorite": favourite, "app": app}
+    action: dict[str, Any] = {"type": "play_music", "query": "" if favourite else query,
+                              "favorite": favourite, "app": app}
+    m = re.match(r"^(.+?)\s+by\s+(.+)$", query) if not favourite else None
+    if m:  # "shape of you by ed sheeran" -> exact track hint for the music app
+        action["title"], action["artist"] = m.group(1).strip(), m.group(2).strip()
+    return action
+
+
+_RAW_LEADING = re.compile(
+    r"^\W*(?:(?:hey|ok|okay)\s+)?(?:edith[\s,.:!-]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?",
+    re.I)
+_SAY = r"(?:saying|that says|which says|telling (?:him|her|them)|to say|and say|that|:|-)"
+
+
+def parse_message(text: str) -> dict[str, Any] | None:
+    """WhatsApp messages and emails. Uses the original casing so the message reads naturally."""
+    raw = _RAW_LEADING.sub("", text.strip()).strip()
+    raw = re.sub(r"\s+(?:please)\.?$", "", raw, flags=re.I)
+    patterns = [
+        # email
+        ("email", rf"^(?:send|write)?\s*(?:an?\s+)?(?:e-?mail|mail)\s+(?:to\s+)?(?P<to>[^:]+?)\s*(?:{_SAY}|(?=about\s|regarding\s))\s*(?P<msg>.+)$"),
+        ("email", rf"^(?:send|write)\s+(?P<to>.+?)\s+an?\s+(?:e-?mail|mail)\s*{_SAY}?\s*(?P<msg>.+)$"),
+        # whatsapp
+        ("whatsapp", r"^open\s+whatsapp\s+and\s+(?:type|send|write|say|text)\s+(?P<msg>.+?)\s+to\s+(?P<to>[^,]+?)\.?$"),
+        ("whatsapp", rf"^(?:open\s+whatsapp\s+and\s+)?(?:send|write|type)?\s*(?:an?\s+)?(?:whatsapp|message|text|msg)"
+                     rf"(?:\s+message)?\s+(?:to\s+)?(?P<to>[^:]+?)(?:\s+on\s+whatsapp)?\s*{_SAY}\s*(?P<msg>.+)$"),
+        ("whatsapp", rf"^(?:send|write)\s+(?P<to>.+?)\s+an?\s+(?:whatsapp|message|text)(?:\s+message)?(?:\s+on\s+whatsapp)?"
+                     rf"\s*{_SAY}?\s*(?P<msg>.+)$"),
+        ("whatsapp", rf"^(?:on\s+)?whatsapp\s+(?P<to>[^:]+?)\s*{_SAY}\s*(?P<msg>.+)$"),
+    ]
+    for kind, pat in patterns:
+        m = re.match(pat, raw, re.I)
+        if not m:
+            continue
+        to = m.group("to").strip(" ,.")
+        msg = m.group("msg").strip()
+        to = re.sub(r"\s+on\s+whatsapp$", "", to, flags=re.I)
+        if kind == "email":
+            # "rahul at gmail dot com" -> rahul@gmail.com
+            to = re.sub(r"\s+at\s+", "@", to, flags=re.I) if re.search(r"\sdot\s", to, re.I) else to
+            to = re.sub(r"\s+dot\s+", ".", to, flags=re.I)
+        if to and msg and len(to.split()) <= 5:
+            return {"type": kind, "to": to, "message": msg}
+    return None
+
+
+def parse_leads(t: str) -> dict[str, Any] | None:
+    m = re.match(r"^(?:find|get|search(?: for)?|look for|show)(?: me)?(?: some| new| a few)?\s+"
+                 r"(?:leads?|clients?|prospects?|customers?)(?:\s+(?:for|of|in|near|on|among|from))?\s*(.*)$", t) or \
+        re.match(r"^(?:find|get|search(?: for)?|look for|show)(?: me)?\s+(.+?)\s+"
+                 r"(?:without|with no|that don'?t have|who don'?t have|having no)\s+(?:a\s+)?websites?(.*)$", t)
+    if not m:
+        return None
+    query = " ".join(g for g in m.groups() if g).strip()
+    query = re.sub(r"\s*(?:without|with no|that don'?t have|who don'?t have|having no)\s+(?:a\s+)?websites?\s*", " ", query)
+    query = re.sub(r"^(?:(?:on|from|using|through)\s+)?google maps\s*(?:(?:for|in|of)\s+)?", "", query)
+    query = re.sub(r"\s+(?:on|from|using|through)\s+google maps$", "", query)
+    return {"type": "find_leads", "query": " ".join(query.split())}
 
 
 def parse_command(text: str) -> dict[str, Any] | None:
     """Return an action dict for common phrasings, or None."""
+    msg = parse_message(text)
+    if msg:
+        return msg
     t = normalise(text)
     if not t:
         return None
+    leads = parse_leads(t)
+    if leads:
+        return leads
 
     # --- music: "open spotify and play my favourite music", "play arijit singh on spotify"
     m = re.match(r"^(?:open|launch|start|go to)\s+(?:the\s+)?(.+?)(?:\s+app)?\s+and\s+(?:then\s+)?(?:play|put on)\s*(.*)$", t)
@@ -175,9 +239,13 @@ If it is a request to control the phone, reply with ONLY one JSON object, no oth
 {{"type":"alarm","hour":<0-23>,"minute":<0-59>,"label":null}}
 {{"type":"timer","seconds":<number>}}
 {{"type":"navigate","destination":"<place>"}}
+{{"type":"find_leads","query":"<business type and area, e.g. dentists in Indiranagar Bangalore>"}}
+{{"type":"email","to":"<contact name or email address>","message":"<what the email should say>"}}
+{{"type":"whatsapp","to":"<contact name>","message":"<exact message text>"}}
 If it is NOT a phone command (a question, a chat, anything else) reply with exactly: {{"type":"none"}}"""
 
-_ALLOWED_TYPES = {"call", "open_app", "play_music", "media", "alarm", "timer", "navigate"}
+_ALLOWED_TYPES = {"call", "open_app", "play_music", "media", "alarm", "timer", "navigate",
+                  "find_leads", "email", "whatsapp"}
 
 
 def validate_action(a: Any) -> dict[str, Any] | None:
@@ -199,7 +267,15 @@ def validate_action(a: Any) -> dict[str, Any] | None:
         app = app if app in set(MUSIC_APPS.values()) else None
         q = s("query", 200)
         fav = bool(a.get("favorite")) or not q
-        return {"type": t, "query": "" if fav else q, "favorite": fav, "app": app}
+        out = {"type": t, "query": "" if fav else q, "favorite": fav, "app": app}
+        if not fav and s("title") and s("artist"):
+            out["title"], out["artist"] = s("title", 200), s("artist", 200)
+        return out
+    if t == "find_leads":
+        return {"type": t, "query": s("query", 200)}
+    if t in ("email", "whatsapp"):
+        to, msg = s("to", 200), s("message", 2000 if t == "email" else 1000)
+        return {"type": t, "to": to, "message": msg} if to and msg else None
     if t == "media":
         c = s("command")
         return {"type": t, "command": c} if c in MEDIA_COMMANDS else None
@@ -271,6 +347,13 @@ def describe(action: dict[str, Any]) -> str:
         return f"Timer set for {s // 60} minutes." if s >= 60 and s % 60 == 0 else f"Timer set for {s} seconds."
     if t == "navigate":
         return f"Starting directions to {action['destination']}."
+    if t == "find_leads":
+        q = action.get("query")
+        return f"Looking for {q} without a website." if q else "Which businesses, and where? For example, dentists in Indiranagar."
+    if t == "email":
+        return f"Writing an email to {action['to']}."
+    if t == "whatsapp":
+        return f"WhatsApp to {action['to']}: {action['message']}"
     return "Okay."
 
 

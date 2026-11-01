@@ -121,6 +121,11 @@ Good to know:
 * EDITH can't tap buttons inside other apps or read your screen. That would need full
   screen access, which we deliberately don't use.
 
+## Leads, email, WhatsApp
+
+"Find me leads for …", "email … saying …", "WhatsApp … saying …": setup and details in
+[LEADS_AND_EMAIL.md](LEADS_AND_EMAIL.md).
+
 ## Meeting mode: answers to the client's questions, automatically
 
 Tap **Start Meeting mode** and confirm that everyone in the meeting knows an AI assistant is

@@ -110,6 +110,13 @@ export function createApi(getSettings) {
         body: { notes, consent_confirmed: consent },
         timeoutMs: 90000,
       }),
+    listLeads: () => request('/api/leads'),
+    saveLead: (lead) => request('/api/leads', { method: 'POST', body: lead }),
+    deleteLead: (id) => request(`/api/leads/${id}`, { method: 'DELETE' }),
+    exportLeads: async () => {
+      const res = await request('/api/leads/export.csv', { raw: true });
+      return res.blob();
+    },
     transcribe: (blob, language) => {
       const form = new FormData();
       form.append('audio', blob, 'clip.webm');

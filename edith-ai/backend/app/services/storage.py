@@ -69,6 +69,20 @@ class Store(Protocol):
     def list_documents(self, user_id: str) -> list[DocumentRecord]: ...
     def delete_document(self, user_id: str, document_id: str) -> bool: ...
     def list_chunks(self, user_id: str, document_ids: list[str] | None = None) -> list[ChunkRecord]: ...
+    # leads
+    def save_lead(self, user_id: str, lead: dict[str, Any]) -> dict[str, Any]: ...
+    def list_leads(self, user_id: str) -> list[dict[str, Any]]: ...
+    def delete_lead(self, user_id: str, lead_id: str) -> bool: ...
+
+
+LEAD_FIELDS = ("place_id", "name", "phone", "phone_international", "address", "rating", "reviews",
+               "maps_url", "social_url", "query", "status", "notes")
+
+
+def _clean_lead(lead: dict[str, Any]) -> dict[str, Any]:
+    out = {k: lead.get(k) for k in LEAD_FIELDS}
+    out["status"] = out.get("status") or "new"
+    return out
 
 
 class InMemoryStore:
@@ -78,6 +92,7 @@ class InMemoryStore:
         self._memory_enabled: dict[str, bool] = {}
         self._documents: dict[str, DocumentRecord] = {}
         self._chunks: list[ChunkRecord] = []
+        self._leads: dict[str, dict[str, Any]] = {}
 
     # --- memories ---
     def list_memories(self, user_id: str) -> list[MemoryRecord]:
@@ -143,6 +158,29 @@ class InMemoryStore:
                 return False
             del self._documents[document_id]
             self._chunks = [c for c in self._chunks if c.document_id != document_id]
+            return True
+
+    def save_lead(self, user_id: str, lead: dict[str, Any]) -> dict[str, Any]:
+        data = _clean_lead(lead)
+        with self._lock:
+            for existing in self._leads.values():  # one row per business per user
+                if existing["user_id"] == user_id and existing["place_id"] == data["place_id"]:
+                    existing.update({k: v for k, v in data.items() if v is not None})
+                    return dict(existing)
+            rec = {"id": str(uuid.uuid4()), "user_id": user_id, **data, "created_at": _now()}
+            self._leads[rec["id"]] = rec
+            return dict(rec)
+
+    def list_leads(self, user_id: str) -> list[dict[str, Any]]:
+        rows = [dict(r) for r in self._leads.values() if r["user_id"] == user_id]
+        return sorted(rows, key=lambda r: r["created_at"], reverse=True)
+
+    def delete_lead(self, user_id: str, lead_id: str) -> bool:
+        with self._lock:
+            r = self._leads.get(lead_id)
+            if not r or r["user_id"] != user_id:
+                return False
+            del self._leads[lead_id]
             return True
 
     def list_chunks(self, user_id: str, document_ids: list[str] | None = None) -> list[ChunkRecord]:
@@ -300,3 +338,20 @@ class SupabaseStore:
         return [ChunkRecord(document_id=r["document_id"], user_id=r["user_id"],
                             chunk_index=r["chunk_index"], content=r["content"],
                             title=(r.get("knowledge_documents") or {}).get("title", "")) for r in rows]
+
+    # --- leads (Supabase) ---
+    def save_lead(self, user_id: str, lead: dict[str, Any]) -> dict[str, Any]:
+        rows = self._req("POST", "/leads",
+                         headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+                         params={"on_conflict": "user_id,place_id"},
+                         json={"user_id": user_id, **_clean_lead(lead)})
+        return rows[0]
+
+    def list_leads(self, user_id: str) -> list[dict[str, Any]]:
+        return self._req("GET", "/leads", params={"user_id": f"eq.{user_id}", "order": "created_at.desc",
+                                                  "limit": "1000"})
+
+    def delete_lead(self, user_id: str, lead_id: str) -> bool:
+        rows = self._req("DELETE", "/leads", headers={"Prefer": "return=representation"},
+                         params={"id": f"eq.{lead_id}", "user_id": f"eq.{user_id}"})
+        return bool(rows)

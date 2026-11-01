@@ -82,6 +82,35 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         )
     }
 
+    /** Businesses without a website (Google Places), as JSON objects from the server. */
+    fun findLeads(query: String, max: Int = 20): List<JSONObject> {
+        val payload = JSONObject().put("query", query).put("max_leads", max)
+        val res = JSONObject(request("POST", "/api/leads/search", payload.toString().toByteArray(), "application/json"))
+        val arr = res.optJSONArray("leads") ?: JSONArray()
+        return (0 until arr.length()).map { arr.getJSONObject(it) }
+    }
+
+    fun saveLead(lead: JSONObject, status: String = "new") {
+        val body = JSONObject(lead.toString()).put("status", status)
+        listOf("rating", "reviews").forEach { if (body.isNull(it)) body.remove(it) }
+        request("POST", "/api/leads", body.toString().toByteArray(), "application/json")
+    }
+
+    data class EmailDraft(val subject: String, val body: String)
+
+    fun emailDraft(toName: String, instruction: String): EmailDraft {
+        val payload = JSONObject().put("to_name", toName).put("instruction", instruction)
+        val res = JSONObject(request("POST", "/api/email/draft", payload.toString().toByteArray(), "application/json"))
+        return EmailDraft(res.optString("subject"), res.optString("body"))
+    }
+
+    /** Only call after the user heard the draft and said yes. */
+    fun emailSend(to: String, draft: EmailDraft) {
+        val payload = JSONObject().put("to", to).put("subject", draft.subject).put("body", draft.body)
+            .put("confirmed", true)
+        request("POST", "/api/email/send", payload.toString().toByteArray(), "application/json")
+    }
+
     data class MeetingHelp(val question: String?, val answer: String?)
 
     /** Live meeting help. Returns answer = null when there is nothing worth answering. */

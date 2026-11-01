@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { supabaseAuthEnabled, supabaseSignIn } from '../services/api.js';
 import { listVoices, synthesisSupported } from '../services/voice.js';
 
-const TABS = ['General', 'Voice', 'Memory', 'Documents', 'Meeting', 'Privacy'];
+const TABS = ['General', 'Voice', 'Memory', 'Documents', 'Leads', 'Meeting', 'Privacy'];
 
 export default function SettingsPanel({ open, onClose, settings, onChange, api, health, onClearConversation, notify }) {
   const [tab, setTab] = useState('General');
@@ -38,6 +38,7 @@ export default function SettingsPanel({ open, onClose, settings, onChange, api, 
           {tab === 'Voice' && <Voice settings={settings} set={set} health={health} />}
           {tab === 'Memory' && <MemoryTab api={api} notify={notify} />}
           {tab === 'Documents' && <DocumentsTab api={api} notify={notify} />}
+          {tab === 'Leads' && <LeadsTab api={api} notify={notify} health={health} />}
           {tab === 'Meeting' && <MeetingTab api={api} notify={notify} />}
           {tab === 'Privacy' && (
             <PrivacyTab api={api} settings={settings} set={set} notify={notify}
@@ -299,6 +300,74 @@ function DocumentsTab({ api, notify }) {
               <span className="list__text">{d.title} <small>({d.chunk_count} parts)</small></span>
               <button className="link-btn link-btn--danger"
                 onClick={async () => { await api.deleteDocument(d.id).catch((e) => notify(e.message, 'error')); reload(); }}>
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+const LEAD_STATUSES = ['new', 'called', 'interested', 'not_interested', 'won'];
+
+function LeadsTab({ api, notify, health }) {
+  const [items, reload] = useList(api.listLeads, notify);
+
+  async function setStatus(lead, status) {
+    try {
+      await api.saveLead({ ...lead, status, rating: lead.rating ?? null, reviews: lead.reviews ?? null });
+      reload();
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  async function download() {
+    try {
+      const blob = await api.exportLeads();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'edith-leads.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify(e.message, 'error');
+    }
+  }
+
+  return (
+    <>
+      <p className="note">
+        On your phone say <em>“Edith, find me leads for dentists in Indiranagar”</em>. EDITH reads businesses
+        without a website one by one; say <em>“save”</em> to keep one here.
+      </p>
+      {health && !health.leads_configured && (
+        <p className="note" style={{ color: 'var(--warn)' }}>
+          Lead finder isn’t set up yet: add GOOGLE_MAPS_API_KEY on the server (see docs/LEADS_AND_EMAIL.md).
+        </p>
+      )}
+      <button className="btn btn--primary" onClick={download} disabled={!items?.length}>Download CSV (Excel)</button>
+      {items === null ? <p className="note">Loading…</p> : items.length === 0 ? (
+        <p className="note">No saved leads yet.</p>
+      ) : (
+        <ul className="list">
+          {items.map((l) => (
+            <li key={l.id} style={{ flexWrap: 'wrap' }}>
+              <span className="list__text">
+                <strong>{l.name}</strong>{l.rating ? ` · ${l.rating}★` : ''}<br />
+                {l.phone && <a href={`tel:${l.phone}`}>{l.phone}</a>}{' '}
+                <small>{l.address}</small>
+                {l.maps_url && <> · <a href={l.maps_url} target="_blank" rel="noreferrer">Maps</a></>}
+              </span>
+              <select value={l.status} onChange={(e) => setStatus(l, e.target.value)} style={{ width: 'auto' }}
+                aria-label={`Status of ${l.name}`}>
+                {LEAD_STATUSES.map((s) => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+              </select>
+              <button className="link-btn link-btn--danger"
+                onClick={async () => { await api.deleteLead(l.id).catch((e) => notify(e.message, 'error')); reload(); }}>
                 Delete
               </button>
             </li>

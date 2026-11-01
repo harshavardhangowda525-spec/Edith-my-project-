@@ -36,7 +36,7 @@ import java.util.concurrent.TimeUnit
  * Performs phone actions described by the EDITH server (call, open app, music, alarm, ...).
  * Everything runs on the device: contact names are matched here and never uploaded.
  */
-class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
+class PhoneActions(private val ctx: Context, private val prefs: Prefs, private val api: EdithApi? = null) {
 
     data class Contact(val name: String, val number: String)
 
@@ -45,10 +45,20 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
         data class Do(val say: String, val sayAfter: Boolean = false, val run: () -> String?) : Plan()
         data class Call(val contact: Contact) : Plan()
         data class Fail(val say: String) : Plan()
+        /** Read back [prompt] and only run [onYes] after the user says "yes". */
+        data class Confirm(val prompt: String, val doneSay: String = "Done.", val onYes: () -> String?) : Plan()
+        data class Leads(val query: String) : Plan()
     }
 
     fun plan(action: JSONObject, say: String): Plan = when (action.optString("type")) {
         "call" -> planCall(action.optString("contact"))
+        "find_leads" -> {
+            val q = action.optString("query").trim()
+            if (q.isBlank()) Plan.Fail("Which businesses, and where? For example: find leads for dentists in Indiranagar.")
+            else Plan.Leads(q)
+        }
+        "whatsapp" -> planWhatsApp(action.optString("to"), action.optString("message"))
+        "email" -> planEmail(action.optString("to"), action.optString("message"))
         "open_app" -> planOpenApp(action.optString("app"))
         "play_music" -> planMusic(action)
         "media" -> planMedia(action.optString("command"), say)
@@ -178,6 +188,104 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
 
     private fun mask(n: String) = if (n.length > 4) "…" + n.takeLast(4) else n
 
+    // ------------------------------------------------------------------ WhatsApp & email
+
+    private fun planWhatsApp(to: String, message: String): Plan {
+        val pkg = listOf("com.whatsapp", "com.whatsapp.w4b").firstOrNull { isInstalled(it) }
+            ?: return Plan.Fail("WhatsApp isn't installed on this phone.")
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            return Plan.Fail("I need permission to read your contacts. Turn on calls in the EDITH app.")
+        }
+        val matches = findContacts(to)
+        val contact = when {
+            matches.isEmpty() -> return Plan.Fail("I couldn't find $to in your contacts.")
+            matches.size > 1 -> return Plan.Fail("I found ${matches.take(3).joinToString(" and ") { it.name }}. Please say the full name.")
+            else -> matches[0]
+        }
+        val phone = whatsAppNumber(contact.number)
+            ?: return Plan.Fail("${contact.name}'s number has no country code. Set your country code in EDITH settings.")
+        val text = message.trim()
+        val autoSend = WhatsAppSender.isEnabled(ctx)
+        return Plan.Confirm("WhatsApp to ${contact.name}: $text. Should I send it?",
+            doneSay = if (autoSend) "Sending it on WhatsApp." else "It's typed in WhatsApp. Tap send.") {
+            val auto = WhatsAppSender.isEnabled(ctx)
+            if (auto) WhatsAppSender.arm(text)
+            val intent = Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://api.whatsapp.com/send?phone=$phone&text=" + Uri.encode(text))).setPackage(pkg)
+            val err = launch(intent, "WhatsApp")
+            when {
+                err != null -> { WhatsAppSender.disarm(); err }
+                auto -> { EdithState.log("WhatsApp to ${contact.name}: opened, auto-send armed"); null }
+                else -> "The message is typed in WhatsApp. Tap send. To let me send it myself, turn on WhatsApp auto-send in EDITH."
+            }
+        }
+    }
+
+    /** Digits with country code, as WhatsApp links need (e.g. 919845012345). */
+    fun whatsAppNumber(raw: String): String? =
+        intlNumber(raw, prefs.countryCode.ifBlank { defaultCountryCode() })
+
+    private fun defaultCountryCode(): String {
+        val iso = runCatching {
+            ctx.getSystemService(android.telephony.TelephonyManager::class.java).simCountryIso
+        }.getOrNull()?.lowercase().orEmpty().ifBlank { java.util.Locale.getDefault().country.lowercase() }
+        return COUNTRY_CODES[iso] ?: ""
+    }
+
+    private fun planEmail(to: String, instruction: String): Plan {
+        val api = api ?: return Plan.Fail("Email isn't available right now.")
+        val (name, address) = if ("@" in to) {
+            to.substringBefore("@") to to.trim()
+        } else {
+            if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                return Plan.Fail("I need permission to read your contacts. Turn on calls in the EDITH app.")
+            }
+            val matches = findContactEmails(to)
+            when {
+                matches.isEmpty() -> return Plan.Fail("I couldn't find an email address for $to in your contacts.")
+                matches.size > 1 -> return Plan.Fail("I found ${matches.take(3).joinToString(" and ") { it.name }}. Please say the full name.")
+                else -> matches[0].name to matches[0].number
+            }
+        }
+        val draft = try {
+            api.emailDraft(name, instruction)
+        } catch (e: EdithException) {
+            return Plan.Fail(e.message ?: "I couldn't write the email.")
+        }
+        EdithState.update(answer = "✉ To: $address\nSubject: ${draft.subject}\n\n${draft.body}")
+        val prompt = "Email to $name. Subject: ${draft.subject}. It says: ${draft.body.replace("\n", " ")}. Should I send it?"
+        return Plan.Confirm(prompt, doneSay = "Email sent.") {
+            try {
+                api.emailSend(address, draft)
+                EdithState.log("Email sent to $name ($address)")
+                null
+            } catch (e: EdithException) {
+                EdithState.log("Email to $name failed: ${e.message}")
+                e.message ?: "Sending failed."
+            }
+        }
+    }
+
+    /** Contacts with an email address; Contact.number holds the address. */
+    fun findContactEmails(spoken: String): List<Contact> {
+        val all = mutableListOf<Triple<String, String, Boolean>>()
+        ctx.contentResolver.query(
+            ContactsContract.CommonDataKinds.Email.CONTENT_URI,
+            arrayOf(
+                ContactsContract.CommonDataKinds.Email.DISPLAY_NAME_PRIMARY,
+                ContactsContract.CommonDataKinds.Email.ADDRESS,
+                ContactsContract.CommonDataKinds.Email.IS_SUPER_PRIMARY,
+            ), null, null, null,
+        )?.use { c ->
+            while (c.moveToNext()) {
+                val name = c.getString(0) ?: continue
+                val email = c.getString(1) ?: continue
+                all += Triple(name, email, c.getInt(2) == 1)
+            }
+        }
+        return matchContacts(spoken, all)
+    }
+
     // ------------------------------------------------------------------ apps
 
     private fun planOpenApp(spoken: String): Plan {
@@ -224,8 +332,17 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
             // the app to play something it picks for you (usually your recent music).
             val intent = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
                 .setPackage(pkg)
-                .putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
                 .putExtra(SearchManager.QUERY, query)
+            val title = action.optString("title").takeIf { it.isNotBlank() && it != "null" }
+            val artist = action.optString("artist").takeIf { it.isNotBlank() && it != "null" }
+            if (title != null) {
+                // "song by artist": tell the app it's a specific track, so it plays that song.
+                intent.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, MediaStore.Audio.Media.ENTRY_CONTENT_TYPE)
+                    .putExtra(MediaStore.EXTRA_MEDIA_TITLE, title)
+                artist?.let { intent.putExtra(MediaStore.EXTRA_MEDIA_ARTIST, it) }
+            } else {
+                intent.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+            }
             launch(intent, appName)
         }
     }
@@ -368,6 +485,27 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs) {
             "spotify" to "Spotify", "youtube_music" to "YouTube Music", "youtube" to "YouTube",
             "jiosaavn" to "JioSaavn", "gaana" to "Gaana", "wynk" to "Wynk", "amazon_music" to "Amazon Music",
             "apple_music" to "Apple Music",
+        )
+
+        /** "+91 98450 12345", "098450 12345", "9845012345" (cc 91) -> "919845012345"; null if unsure. */
+        fun intlNumber(raw: String, cc: String): String? {
+            val n = raw.filter { it.isDigit() || it == '+' }
+            return when {
+                n.startsWith("+") -> n.drop(1).filter { it.isDigit() }
+                n.startsWith("00") -> n.drop(2)
+                cc.isBlank() -> null
+                n.startsWith("0") -> cc + n.trimStart('0')
+                n.length == 10 -> cc + n
+                n.length > 10 && n.startsWith(cc) -> n
+                else -> cc + n
+            }?.takeIf { it.length in 8..15 }
+        }
+
+        private val COUNTRY_CODES = mapOf(
+            "in" to "91", "us" to "1", "ca" to "1", "gb" to "44", "ae" to "971", "sa" to "966", "au" to "61",
+            "sg" to "65", "my" to "60", "de" to "49", "fr" to "33", "nl" to "31", "ie" to "353", "nz" to "64",
+            "pk" to "92", "bd" to "880", "lk" to "94", "np" to "977", "qa" to "974", "kw" to "965", "om" to "968",
+            "bh" to "973", "za" to "27", "ng" to "234", "ke" to "254", "id" to "62", "ph" to "63", "jp" to "81",
         )
 
         /** Common ways people save family members (incl. Indian usage). */

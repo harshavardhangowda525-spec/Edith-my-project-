@@ -20,6 +20,11 @@ It installs to your home screen, unlocks with your personal EDITH password, and 
 Always-on wake word: say **"Edith"** with the screen off and EDITH answers in your headphones.
 Install and setup: **[docs/ANDROID_APP.md](docs/ANDROID_APP.md)**.
 
+## Leads, Gmail, WhatsApp
+
+Find businesses without a website (Google Places), send Gmail and WhatsApp messages by voice with
+read-back confirmation: **[docs/LEADS_AND_EMAIL.md](docs/LEADS_AND_EMAIL.md)**.
+
 ## Quick start (Windows)
 
 One command (checks prerequisites, creates venv and `.env` files, installs, runs tests):

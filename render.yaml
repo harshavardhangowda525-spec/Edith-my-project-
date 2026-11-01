@@ -36,5 +36,14 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      # --- optional: lead finder + Gmail (see edith-ai/docs/LEADS_AND_EMAIL.md) ---
+      - key: GOOGLE_MAPS_API_KEY
+        sync: false
+      - key: GMAIL_ADDRESS
+        sync: false
+      - key: GMAIL_APP_PASSWORD
+        sync: false
+      - key: EMAIL_SENDER_NAME
+        sync: false
       - key: RATE_LIMIT_PER_MINUTE
         value: "30"

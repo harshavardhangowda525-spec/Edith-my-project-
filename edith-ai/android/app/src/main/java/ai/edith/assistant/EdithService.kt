@@ -112,6 +112,20 @@ class EdithService : Service() {
 
     // Conversation mode: after "Edith", keep listening for follow-ups until 2 min without one.
     @Volatile private var conversationUntil = 0L
+    /** Set by actions that need a spoken reply (yes/no, next lead): start conversation mode even if off. */
+    @Volatile private var forceConversation = false
+
+    /** "Should I send it?" waiting for yes/no. */
+    private class Pending(val prompt: String, val doneSay: String, val onYes: () -> String?, val until: Long) {
+        var unclear = 0
+    }
+    @Volatile private var pendingConfirm: Pending? = null
+
+    /** Leads being read out one by one. */
+    private class LeadSession(val query: String, val leads: List<org.json.JSONObject>) {
+        var index = 0
+    }
+    @Volatile private var leadSession: LeadSession? = null
     private val conversationEnd = AtomicBoolean(false)
     private val conversationPending = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var lastAutoAnswerAt = 0L
@@ -315,7 +329,8 @@ class EdithService : Service() {
                 current.flush() // drop audio captured while EDITH was thinking/speaking
                 recognizer.reset()
                 if (!running.get()) break
-                if (prefs.conversationMode) {
+                if (prefs.conversationMode || forceConversation) {
+                    forceConversation = false
                     conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
                     conversationEnd.set(false)
                     seg.reset()
@@ -466,6 +481,10 @@ class EdithService : Service() {
                 val text = api.transcribe(wav, lang)
                 if (text.isBlank()) return@execute
                 EdithState.update(heard = text)
+                if (handleLocalReply(text, prefs)) {
+                    conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+                    return@execute
+                }
                 val hist = synchronized(history) { history.toList() }
                 val res = api.assistant(text, hist, lang, followup = true)
                 if (res.kind != "ignore") logDecision(text, res)
@@ -491,6 +510,7 @@ class EdithService : Service() {
                             while (history.size > 12) history.removeFirst()
                         }
                         conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+                        forceConversation = false
                     }
                 }
             } catch (e: EdithException) {
@@ -598,6 +618,7 @@ class EdithService : Service() {
                 return
             }
             EdithState.update(question = question, answer = "")
+            if (handleLocalReply(question, prefs)) return
             val result = api.assistant(question, synchronized(history) { history.toList() }, lang)
             logDecision(question, result)
             val spoken = result.action?.let { performAction(it, result.say, prefs) }
@@ -619,8 +640,16 @@ class EdithService : Service() {
 
     /** Runs a phone action (call, open app, music, ...). Returns what EDITH said, for the history. */
     private fun performAction(action: org.json.JSONObject, say: String, prefs: Prefs): String {
-        val actions = PhoneActions(this, prefs)
+        val actions = PhoneActions(this, prefs, EdithApi(prefs.serverUrl, prefs.password))
         return when (val plan = actions.plan(action, say)) {
+            is PhoneActions.Plan.Confirm -> {
+                pendingConfirm = Pending(plan.prompt, plan.doneSay, plan.onYes, System.currentTimeMillis() + 60_000)
+                forceConversation = true
+                EdithState.log("Waiting for yes/no: ${plan.prompt.take(80)}")
+                speak(plan.prompt)
+                plan.prompt
+            }
+            is PhoneActions.Plan.Leads -> startLeads(plan.query, prefs)
             is PhoneActions.Plan.Fail -> {
                 EdithState.log("${action.optString("type")}: ${plan.say}")
                 EdithState.update(answer = "⚠ ${plan.say}")
@@ -637,29 +666,152 @@ class EdithService : Service() {
                 problem ?: plan.say
             }
             is PhoneActions.Plan.Call -> {
-                // Safety: announce and give 3 seconds to cancel before dialling.
-                val name = plan.contact.name
-                EdithState.log("Contact match: $name")
-                cancelCall.set(false)
-                EdithState.update(answer = "📞 Calling $name… (tap Cancel call to stop)")
-                showCallCountdown(name)
-                speak("Calling $name.")
-                val deadline = System.currentTimeMillis() + 3000
-                while (System.currentTimeMillis() < deadline && !cancelCall.get() && running.get()) Thread.sleep(100)
-                updateNotification("Listening…")
-                if (cancelCall.get() || !running.get()) {
-                    EdithState.log("Call to $name cancelled")
-                    EdithState.update(answer = "Call to $name cancelled.")
-                    speak("Cancelled.")
-                    "Call cancelled."
-                } else {
-                    releaseMicForCall()
-                    val problem = actions.placeCall(plan.contact)
-                    problem?.let { speak(it) }
-                    problem ?: "Calling $name."
-                }
+                EdithState.log("Contact match: ${plan.contact.name}")
+                callWithCountdown(actions, plan.contact)
             }
         }
+    }
+
+    /** Safety: announce and give 3 seconds to cancel before dialling. */
+    private fun callWithCountdown(actions: PhoneActions, contact: PhoneActions.Contact): String {
+        val name = contact.name
+        cancelCall.set(false)
+        EdithState.update(answer = "📞 Calling $name… (tap Cancel call to stop)")
+        showCallCountdown(name)
+        speak("Calling $name.")
+        val deadline = System.currentTimeMillis() + 3000
+        while (System.currentTimeMillis() < deadline && !cancelCall.get() && running.get()) Thread.sleep(100)
+        updateNotification("Listening…")
+        if (cancelCall.get() || !running.get()) {
+            EdithState.log("Call to $name cancelled")
+            EdithState.update(answer = "Call to $name cancelled.")
+            speak("Cancelled.")
+            return "Call cancelled."
+        }
+        releaseMicForCall()
+        val problem = actions.placeCall(contact)
+        problem?.let { speak(it) }
+        return problem ?: "Calling $name."
+    }
+
+    // ------------------------------------------------------------------ leads
+
+    private fun startLeads(query: String, prefs: Prefs): String {
+        speak("Searching Google Maps for $query without a website.")
+        val leads = try {
+            EdithApi(prefs.serverUrl, prefs.password).findLeads(query)
+        } catch (e: EdithException) {
+            EdithState.log("Leads failed: ${e.message}")
+            speak(e.message ?: "The lead search failed.")
+            return e.message ?: "Lead search failed."
+        }
+        EdithState.log("Leads for \"$query\": ${leads.size} without a website")
+        if (leads.isEmpty()) {
+            val msg = "I didn't find any $query without a website. Try a different area or business type."
+            speak(msg)
+            return msg
+        }
+        leadSession = LeadSession(query, leads)
+        forceConversation = true
+        speak("I found ${leads.size}.")
+        readLead(first = true)
+        return "Found ${leads.size} leads for $query."
+    }
+
+    private fun readLead(first: Boolean = false) {
+        val s = leadSession ?: return
+        val lead = s.leads[s.index]
+        val name = lead.optString("name")
+        val phone = lead.optString("phone")
+        val area = lead.optString("address").split(",").take(2).joinToString(",").trim()
+        val rating = if (lead.isNull("rating")) "" else " Rated ${lead.optDouble("rating")} from ${lead.optInt("reviews")} reviews."
+        val social = if (lead.isNull("social_url")) "" else " They only have a social media page."
+        // Digits one by one so the number is easy to note down.
+        val spokenPhone = phone.filter { it.isDigit() }.toList().chunked(5).joinToString(", ") { it.joinToString(" ") }
+        EdithState.update(answer = "Lead ${s.index + 1}/${s.leads.size}: $name\n☎ $phone\n${lead.optString("address")}")
+        speakWhisper("Lead ${s.index + 1}: $name, $area.$rating$social Phone: $spokenPhone." +
+            if (first) " Say next, repeat, call, save, or stop." else "")
+    }
+
+    /**
+     * Short replies handled on the phone: yes/no for a pending confirmation, and lead commands.
+     * Returns true when handled.
+     */
+    private fun handleLocalReply(text: String, prefs: Prefs): Boolean {
+        val t = text.lowercase().replace(Regex("[^a-z0-9' ]"), " ").replace(Regex("\\s+"), " ").trim()
+            .removePrefix("hey ").removePrefix("edith ").trim()
+        pendingConfirm?.let { p ->
+            if (System.currentTimeMillis() > p.until) {
+                pendingConfirm = null
+                return@let
+            }
+            when {
+                NO_RE.containsMatchIn(t) -> {
+                    pendingConfirm = null
+                    EdithState.log("Not sent (you said no)")
+                    speakWhisper("Okay, I won't send it.")
+                }
+                YES_RE.containsMatchIn(t) -> {
+                    pendingConfirm = null
+                    val problem = speakingDuring { p.onYes() }
+                    EdithState.update(answer = problem?.let { "⚠ $it" } ?: "✓ ${p.doneSay}")
+                    speakWhisper(problem ?: p.doneSay)
+                }
+                else -> {
+                    p.unclear++
+                    if (p.unclear >= 2) {
+                        pendingConfirm = null
+                        speakWhisper("I'll leave it unsent.")
+                    } else {
+                        speakWhisper("Should I send it? Say yes or no.")
+                    }
+                }
+            }
+            return true
+        }
+        val s = leadSession ?: return false
+        when {
+            LEAD_NEXT.matches(t) -> {
+                if (s.index + 1 >= s.leads.size) {
+                    leadSession = null
+                    speakWhisper("That was the last one. Say find leads again for more.")
+                } else {
+                    s.index++
+                    readLead()
+                }
+            }
+            LEAD_PREV.matches(t) -> {
+                s.index = maxOf(0, s.index - 1)
+                readLead()
+            }
+            LEAD_REPEAT.matches(t) -> readLead()
+            LEAD_SAVE.matches(t) -> {
+                val lead = s.leads[s.index]
+                val msg = try {
+                    EdithApi(prefs.serverUrl, prefs.password).saveLead(lead)
+                    EdithState.log("Saved lead: ${lead.optString("name")}")
+                    "Saved."
+                } catch (e: EdithException) {
+                    e.message ?: "Saving failed."
+                }
+                speakWhisper(msg)
+            }
+            LEAD_CALL.matches(t) -> {
+                val lead = s.leads[s.index]
+                val actions = PhoneActions(this, prefs)
+                runCatching { EdithApi(prefs.serverUrl, prefs.password).saveLead(lead, status = "called") }
+                speakingDuring {
+                    callWithCountdown(actions, PhoneActions.Contact(lead.optString("name"), lead.optString("phone")))
+                }
+            }
+            LEAD_STOP.matches(t) -> {
+                leadSession = null
+                conversationEnd.set(true)
+                speakWhisper("Okay, done with leads. Your saved leads are on the EDITH website.")
+            }
+            else -> return false // a normal question: let the server answer it
+        }
+        return true
     }
 
     private fun showCallCountdown(name: String) {
@@ -878,6 +1030,14 @@ class EdithService : Service() {
         private const val NOTIFICATION_ID = 7
         private const val SAMPLE_RATE = 16000
         private const val CONVERSATION_MS = 120_000L // 2 minutes without a question for EDITH
+        private val YES_RE = Regex("^(yes|yeah|yep|yup|ya|sure|ok|okay|send|go ahead|do it|confirm|please do|haan|han|ha|ji|correct|right)\\b")
+        private val NO_RE = Regex("^(no|nope|nah|cancel|don't|do not|stop|never ?mind|wait|not now|nahi|mat)\\b|\\b(don't send|do not send)\\b")
+        private val LEAD_NEXT = Regex("^(next|next one|next lead|skip|skip it|another|another one|more|go on|continue)$")
+        private val LEAD_PREV = Regex("^(previous|previous one|back|go back|last one)$")
+        private val LEAD_REPEAT = Regex("^(repeat|again|say again|say that again|repeat that|what|pardon|number|phone number|what's the number|repeat the number|once more)$")
+        private val LEAD_SAVE = Regex("^(save|save it|save this|save this one|save that|save lead|save this lead|save the lead|bookmark|add it|keep it|keep this)$")
+        private val LEAD_CALL = Regex("^(call|call them|call this|call this one|call it|call him|call her|call that one|call this business|call this number|call now|call the number)$")
+        private val LEAD_STOP = Regex("^(stop|done|that's all|that is all|enough|no more|end|finish|exit|stop leads|close|i'm done)$")
         private const val CONVERSATION_STATUS = "Conversation mode: listening (say \"stop listening\" to end)"
         private const val FRAME = 1600 // 100 ms
 

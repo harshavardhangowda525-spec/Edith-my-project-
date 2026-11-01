@@ -130,7 +130,7 @@
 
         <TextView
             style="@style/Hint"
-            android:text="Say “Edith, call Mom”, “open Instagram”, “play my favourite music on Spotify”, “pause”, “next song”, “set an alarm for 6 AM”, “timer 10 minutes”, “navigate to the airport”." />
+            android:text="Say “Edith, call Mom”, “open Instagram”, “play Kesariya by Arijit Singh on Spotify”, “WhatsApp Rahul saying I’ll be late”, “email Priya saying the proposal is ready”, “find me leads for dentists in Indiranagar”, “pause”, “set an alarm for 6 AM”, “navigate to the airport”." />
 
         <TextView
             android:id="@+id/phoneStatus"
@@ -146,6 +146,27 @@
             android:id="@+id/allowApps"
             style="@style/SmallButton"
             android:text="Allow opening apps &amp; music (display over other apps)" />
+
+        <Button
+            android:id="@+id/allowWhatsApp"
+            style="@style/SmallButton"
+            android:text="Allow WhatsApp auto-send (Accessibility, WhatsApp only)" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="If Android says the setting is restricted: open App info for EDITH → ⋮ (top right) → “Allow restricted settings”, then try again." />
+
+        <Button
+            android:id="@+id/appInfo"
+            style="@style/SmallButton"
+            android:text="Open EDITH App info" />
+
+        <TextView style="@style/Label" android:text="Country code for WhatsApp (numbers saved without +)" />
+        <EditText
+            android:id="@+id/countryCode"
+            style="@style/Input"
+            android:hint="91"
+            android:inputType="number" />
 
         <Button
             android:id="@+id/brandPopups"

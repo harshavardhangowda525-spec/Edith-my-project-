@@ -43,6 +43,11 @@ class Prefs(context: Context) {
         get() = p.getString("music_app", "spotify") ?: "spotify"
         set(v) = p.edit().putString("music_app", v).apply()
 
+    /** Country calling code used for WhatsApp numbers saved without one (e.g. 91 for India). */
+    var countryCode: String
+        get() = p.getString("country_code", "") ?: ""
+        set(v) = p.edit().putString("country_code", v.filter { it.isDigit() }.take(4)).apply()
+
     /** What is missing before EDITH can listen, or null when ready. */
     fun missing(): String? = when {
         serverUrl.isBlank() -> "Enter your EDITH server address."

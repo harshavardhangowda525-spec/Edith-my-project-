@@ -173,6 +173,8 @@ class HealthResponse(BaseModel):
     speech_provider: str
     storage_backend: str
     auth_mode: str
+    leads_configured: bool = False
+    email_configured: bool = False
 
 
 class ErrorBody(BaseModel):

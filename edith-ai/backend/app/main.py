@@ -16,12 +16,14 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.api import chat, documents, health, meeting, memory, voice
+from app.api import chat, documents, email, health, leads, meeting, memory, voice
 from app.config import Settings, get_settings
 from app.errors import AppError
 from app.security.authentication import personal_mode_problem
 from app.security.rate_limit import RateLimiter
 from app.services.ai_service import AIService
+from app.services.email_service import EmailService
+from app.services.leads_service import LeadsService
 from app.services.memory_service import MemoryService
 from app.services.retrieval_service import RetrievalService
 from app.services.speech_service import SpeechService
@@ -132,6 +134,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.memory = MemoryService(store)
     app.state.retrieval = RetrievalService(store)
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_minute)
+    app.state.leads = LeadsService(settings)
+    app.state.email = EmailService(settings)
 
     if settings.ai_provider_problem:
         log.error("AI provider misconfigured: %s", settings.ai_provider_problem)
@@ -191,7 +195,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         log.exception("Unhandled error: %s", type(exc).__name__)
         return _error(500, "internal_error", "Something went wrong on the server")
 
-    for r in (health.router, chat.router, voice.router, memory.router, documents.router, meeting.router):
+    for r in (health.router, chat.router, voice.router, memory.router, documents.router, meeting.router,
+              leads.router, email.router):
         app.include_router(r)
 
     # Serve the built React app from the same origin (single-container deployment).

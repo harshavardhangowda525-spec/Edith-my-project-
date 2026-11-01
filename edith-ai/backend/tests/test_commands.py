@@ -205,3 +205,41 @@ def test_non_followup_unchanged():
     c, p = _client(["Answer."])
     r = c.post("/api/assistant", headers=auth(), json={"message": "Let's get lunch"}).json()
     assert r["kind"] == "answer" and "NOT_FOR_ME" not in p.calls[0]
+
+
+# --- leads / email / whatsapp / song commands --------------------------------------
+
+@pytest.mark.parametrize("said, expected", [
+    ("Edith, find me leads for dentists in Indiranagar Bangalore", {"type": "find_leads", "query": "dentists in indiranagar bangalore"}),
+    ("Find leads: gyms in Koramangala", {"type": "find_leads", "query": "gyms in koramangala"}),
+    ("find me restaurants in Mysore without a website", {"type": "find_leads", "query": "restaurants in mysore"}),
+    ("search for leads on google maps for salons in HSR layout", {"type": "find_leads", "query": "salons in hsr layout"}),
+    ("Find me some leads", {"type": "find_leads", "query": ""}),
+    ("Email Rahul saying the proposal is ready.", {"type": "email", "to": "Rahul", "message": "the proposal is ready."}),
+    ("Send an email to priya@gmail.com about the meeting tomorrow at 10",
+     {"type": "email", "to": "priya@gmail.com", "message": "about the meeting tomorrow at 10"}),
+    ("email rahul at gmail dot com saying hello", {"type": "email", "to": "rahul@gmail.com", "message": "hello"}),
+    ("Write a mail to my boss that I'll be late today", {"type": "email", "to": "my boss", "message": "I'll be late today"}),
+    ("WhatsApp Rahul saying I'll be late by 10 minutes.", {"type": "whatsapp", "to": "Rahul", "message": "I'll be late by 10 minutes."}),
+    ("Open WhatsApp and type hello how are you to Priya", {"type": "whatsapp", "to": "Priya", "message": "hello how are you"}),
+    ("Send a WhatsApp message to Mom saying I reached home.", {"type": "whatsapp", "to": "Mom", "message": "I reached home."}),
+    ("Message Arjun: are we meeting today?", {"type": "whatsapp", "to": "Arjun", "message": "are we meeting today?"}),
+    ("Send Priya a message saying happy birthday!", {"type": "whatsapp", "to": "Priya", "message": "happy birthday!"}),
+    ("Open Spotify and play Shape of You by Ed Sheeran",
+     {"type": "play_music", "query": "shape of you by ed sheeran", "favorite": False, "app": "spotify",
+      "title": "shape of you", "artist": "ed sheeran"}),
+])
+def test_new_commands(said, expected):
+    assert parse_command(said) == expected
+
+
+@pytest.mark.parametrize("said", ["How do I write an email to a client?", "What message should I send to the client?",
+                                  "What are leads in sales?"])
+def test_new_questions_not_commands(said):
+    assert parse_command(said) is None
+
+
+def test_validate_new_actions():
+    assert validate_action({"type": "email", "to": "x", "message": ""}) is None
+    assert validate_action({"type": "whatsapp", "to": "rahul", "message": "hi"}) == {"type": "whatsapp", "to": "rahul", "message": "hi"}
+    assert validate_action({"type": "find_leads", "query": "cafes in goa"}) == {"type": "find_leads", "query": "cafes in goa"}

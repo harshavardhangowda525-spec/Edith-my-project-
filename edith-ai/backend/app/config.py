@@ -107,6 +107,14 @@ class Settings(BaseSettings):
     max_request_bytes: int = 1 * 1024 * 1024
     max_message_chars: int = 4000
 
+    # --- Lead finder (Google Places API, official Google Maps business data) ------
+    google_maps_api_key: str | None = None
+
+    # --- Email (Gmail SMTP with an App password; send-only) -----------------------
+    gmail_address: str | None = None
+    gmail_app_password: str | None = None
+    email_sender_name: str | None = None
+
     # --- Static frontend (single-container deployment) -------------------------
     # When set and the folder exists, the built React app is served from "/".
     static_dir: str | None = None
@@ -117,7 +125,7 @@ class Settings(BaseSettings):
         return (v or "mock").strip().lower().replace("-", "").replace(" ", "") or "mock"
 
     @field_validator("owner_access_token", "supabase_url", "supabase_service_role_key",
-                     "supabase_jwt_secret", mode="before")
+                     "supabase_jwt_secret", "google_maps_api_key", "gmail_address", mode="before")
     @classmethod
     def _strip_pasted(cls, v: object) -> object:
         """Values pasted into hosting dashboards often carry spaces, newlines or quotes."""
@@ -125,6 +133,23 @@ class Settings(BaseSettings):
             v = v.strip(_PASTE_JUNK)
             return v or None
         return v
+
+    @field_validator("gmail_app_password", mode="before")
+    @classmethod
+    def _app_password(cls, v: object) -> object:
+        """Google shows app passwords as 'abcd efgh ijkl mnop'; spaces are not part of it."""
+        if isinstance(v, str):
+            v = "".join(v.split()).strip(_PASTE_JUNK)
+            return v or None
+        return v
+
+    @property
+    def leads_configured(self) -> bool:
+        return bool(self.google_maps_api_key)
+
+    @property
+    def email_configured(self) -> bool:
+        return bool(self.gmail_address and self.gmail_app_password)
 
     @field_validator("owner_user_id", mode="before")
     @classmethod

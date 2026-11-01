@@ -93,6 +93,25 @@ class MainActivity : AppCompatActivity() {
             if (Settings.canDrawOverlays(this)) toast("Already allowed ✓")
             else startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
+        findViewById<Button>(R.id.allowWhatsApp).setOnClickListener {
+            if (WhatsAppSender.isEnabled(this)) { toast("Already allowed ✓"); return@setOnClickListener }
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("WhatsApp auto-send")
+                .setMessage("EDITH will be able to press Send in WhatsApp for a message you just confirmed by " +
+                    "saying \"yes\".\n\nAndroid limits this access to WhatsApp only: EDITH can't see any other " +
+                    "app. It does nothing unless you confirmed a message in the last 20 seconds, and only sends " +
+                    "when the typed text exactly matches.\n\nNext screen: Installed apps → EDITH WhatsApp " +
+                    "auto-send → turn on.")
+                .setPositiveButton("Continue") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        findViewById<Button>(R.id.appInfo).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
+        bindText(R.id.countryCode, prefs.countryCode) { prefs.countryCode = it }
         findViewById<Button>(R.id.brandPopups).setOnClickListener {
             toast("Open “Other permissions” (or “Permissions”) → allow “Display pop-up windows while running in the background” and “Display pop-up windows”.")
             startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
@@ -139,7 +158,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.actionLog).text =
             EdithState.actionLog.joinToString("\n").ifBlank { "Nothing yet" }
         findViewById<TextView>(R.id.phoneStatus).text =
-            "Calls: ${if (calls) "✓ allowed" else "off"}   ·   Open apps & music: ${if (apps) "✓ allowed" else "off"}"
+            "Calls: ${if (calls) "✓ allowed" else "off"}   ·   Open apps & music: ${if (apps) "✓ allowed" else "off"}" +
+                "   ·   WhatsApp auto-send: ${if (WhatsAppSender.isEnabled(this)) "✓ on" else "off"}"
         if (EdithState.running) {
             // 0-10 bars on a log scale: lets you see whether EDITH hears anything at all.
             val bars = (kotlin.math.ln(EdithState.micLevel + 1) / kotlin.math.ln(4000.0) * 10).toInt().coerceIn(0, 10)

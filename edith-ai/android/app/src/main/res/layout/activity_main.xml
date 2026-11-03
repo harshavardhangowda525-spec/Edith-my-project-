@@ -93,10 +93,39 @@
             android:hint="sir"
             android:inputType="textCapWords" />
 
+        <Button
+            android:id="@+id/phoneVoice"
+            style="@style/SmallButton"
+            android:text="🗣 Choose EDITH's voice (on this phone)" />
+
+        <TextView
+            android:id="@+id/speedLabel"
+            style="@style/Label"
+            android:text="Speed" />
+        <SeekBar
+            android:id="@+id/speed"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="100" />
+
+        <TextView
+            android:id="@+id/pitchLabel"
+            style="@style/Label"
+            android:text="Pitch" />
+        <SeekBar
+            android:id="@+id/pitch"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:max="70" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="More voices: Android Settings → System → Languages → Text-to-speech → Speech Services by Google → ⚙ → Install voice data → English (India)." />
+
         <CheckBox
             android:id="@+id/humanVoice"
             style="@style/Radio"
-            android:text="Human-like voice (needs AI_PROVIDER=groq on the server)" />
+            android:text="Groq studio voice instead (uses Groq quota; phone voice is used when the limit is reached)" />
 
         <RadioGroup
             android:id="@+id/voiceName"

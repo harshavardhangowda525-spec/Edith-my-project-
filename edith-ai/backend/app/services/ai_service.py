@@ -39,8 +39,10 @@ title. If the excerpts do not contain the answer, say that they do not.
 - Follow the user's explicit commands when they are safe and lawful."""
 
 MODE_GUIDANCE = {
-    "earbud": "The reply will be spoken aloud. Answer in 1-3 short sentences of natural, friendly "
-              "speech: no markdown, lists, code blocks, URLs or emoji.",
+    "earbud": "The reply will be spoken aloud, so sound like a person talking, not a document: 1-3 "
+              "short sentences, a natural reaction where it fits (\"Sure!\", \"Ooh, good one.\", \"Done!\"), "
+              "contractions, varied wording, no stock phrases like \"As an AI\" or \"I hope this helps\". "
+              "No markdown, lists, code blocks, URLs or emoji.",
     "detailed": "The reply will be read on screen. Be thorough but structured; markdown is allowed.",
     "meeting": "The user is in a live professional meeting: no jokes. Give a crisp suggested answer they "
                "could say (max 3 sentences), then one line starting 'Missing/uncertain:' noting any "

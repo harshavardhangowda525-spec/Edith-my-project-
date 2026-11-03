@@ -107,6 +107,25 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, id -> prefs.voiceName = voices[id] ?: "hannah" }
         }
         findViewById<Button>(R.id.testVoice).setOnClickListener { testVoice() }
+        findViewById<Button>(R.id.phoneVoice).setOnClickListener { choosePhoneVoice() }
+        val speedLabel = findViewById<TextView>(R.id.speedLabel)
+        findViewById<android.widget.SeekBar>(R.id.speed).apply {
+            progress = ((prefs.speechRate - 0.6f) * 100).toInt()
+            speedLabel.text = "Speed: ${"%.2f".format(prefs.speechRate)}×"
+            setOnSeekBarChangeListener(simpleSeek { p ->
+                prefs.speechRate = 0.6f + p / 100f
+                speedLabel.text = "Speed: ${"%.2f".format(prefs.speechRate)}×"
+            })
+        }
+        val pitchLabel = findViewById<TextView>(R.id.pitchLabel)
+        findViewById<android.widget.SeekBar>(R.id.pitch).apply {
+            progress = ((prefs.speechPitch - 0.7f) * 100).toInt()
+            pitchLabel.text = "Pitch: ${"%.2f".format(prefs.speechPitch)}"
+            setOnSeekBarChangeListener(simpleSeek { p ->
+                prefs.speechPitch = 0.7f + p / 100f
+                pitchLabel.text = "Pitch: ${"%.2f".format(prefs.speechPitch)}"
+            })
+        }
         findViewById<Button>(R.id.hearingTest).setOnClickListener {
             if (!EdithState.running) toast("Start EDITH first, then run the hearing test.")
             else startService(Intent(this, EdithService::class.java).setAction(EdithService.ACTION_HEARING_TEST))
@@ -245,6 +264,59 @@ class MainActivity : AppCompatActivity() {
             (EdithState.meetingMode || EdithState.status.startsWith("Conversation"))
         heard.text = if (showHeard) "Heard: ${EdithState.lastHeard}" else ""
         heard.visibility = if (showHeard) View.VISIBLE else View.GONE
+    }
+
+    private fun simpleSeek(onChange: (Int) -> Unit) = object : android.widget.SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(sb: android.widget.SeekBar?, p: Int, fromUser: Boolean) { if (fromUser) onChange(p) }
+        override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {}
+        override fun onStopTrackingTouch(sb: android.widget.SeekBar?) { previewPhoneVoice(null) }
+    }
+
+    private var previewTts: android.speech.tts.TextToSpeech? = null
+
+    private fun withPreviewTts(block: (android.speech.tts.TextToSpeech) -> Unit) {
+        previewTts?.let { block(it); return }
+        var engine: android.speech.tts.TextToSpeech? = null
+        engine = android.speech.tts.TextToSpeech(this) { status ->
+            if (status == android.speech.tts.TextToSpeech.SUCCESS) engine?.let { previewTts = it; block(it) }
+            else toast("No text-to-speech engine on this phone.")
+        }
+    }
+
+    /** Lists the natural offline voices on this phone; tap to hear, OK to choose. */
+    private fun choosePhoneVoice() = withPreviewTts { engine ->
+        val voices = PhoneVoice.candidates(engine)
+        if (voices.isEmpty()) { toast("No offline English voices installed. See the hint below the buttons."); return@withPreviewTts }
+        val labels = (listOf("Automatic (most natural)") + voices.map { PhoneVoice.label(it) }).toTypedArray()
+        var selected = voices.indexOfFirst { it.name == prefs.phoneVoice } + 1
+        runOnUiThread {
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("EDITH's voice")
+                .setSingleChoiceItems(labels, selected) { _, i ->
+                    selected = i
+                    previewPhoneVoice(if (i == 0) "" else voices[i - 1].name)
+                }
+                .setPositiveButton("Use this voice") { _, _ ->
+                    prefs.phoneVoice = if (selected <= 0) "" else voices[selected - 1].name
+                    toast("Saved. EDITH uses it from the next sentence.")
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+    }
+
+    private fun previewPhoneVoice(voiceName: String?) = withPreviewTts { engine ->
+        val saved = prefs.phoneVoice
+        if (voiceName != null) prefs.phoneVoice = voiceName
+        PhoneVoice.apply(engine, prefs)
+        if (voiceName != null) prefs.phoneVoice = saved
+        engine.speak("Hello ${prefs.address}! Ready when you are. Shall we get some work done?",
+            android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "preview")
+    }
+
+    override fun onDestroy() {
+        previewTts?.shutdown()
+        super.onDestroy()
     }
 
     /** Plays a sample of the selected human-like voice. */

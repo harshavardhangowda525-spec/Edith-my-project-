@@ -82,8 +82,21 @@ class Prefs(context: Context) {
 
     /** Natural, human-like voice from the server (Groq Orpheus); falls back to the phone voice. */
     var humanVoice: Boolean
-        get() = p.getBoolean("human_voice", true)
-        set(v) = p.edit().putBoolean("human_voice", v).apply()
+        get() = p.getBoolean("human_voice_v2", false) // off by default: Groq's voice quota runs out fast
+        set(v) = p.edit().putBoolean("human_voice_v2", v).apply()
+
+    /** Phone (offline) voice name; blank = pick the most natural one automatically. */
+    var phoneVoice: String
+        get() = p.getString("phone_voice", "") ?: ""
+        set(v) = p.edit().putString("phone_voice", v).apply()
+
+    var speechRate: Float
+        get() = p.getFloat("speech_rate", 1.0f)
+        set(v) = p.edit().putFloat("speech_rate", v.coerceIn(0.6f, 1.6f)).apply()
+
+    var speechPitch: Float
+        get() = p.getFloat("speech_pitch", 1.0f)
+        set(v) = p.edit().putFloat("speech_pitch", v.coerceIn(0.7f, 1.4f)).apply()
 
     /** Orpheus voice: autumn, diana, hannah, austin, daniel, troy. */
     var voiceName: String

@@ -183,7 +183,12 @@ EDITH is friendly and a little cheeky, calls you **sir** (change it in *EDITH's 
 when it fits (never in Meeting mode or serious moments), and greets you when your headphones
 connect: *"Welcome back, sir. Missed me?"*. Say *"Edith, hello, I'm back"* and it responds like it.
 
-**Human-like voice:** with `AI_PROVIDER=groq`, EDITH speaks with Groq's expressive Orpheus voice
+**Voice:** EDITH uses the most natural offline voice on your phone automatically. Tap **🗣 Choose
+EDITH's voice** to hear and pick another, and adjust **Speed** and **Pitch**. For more natural
+voices, install *English (India)* voice data: Settings → System → Languages → Text-to-speech →
+Speech Services by Google → ⚙ → Install voice data.
+
+**Groq studio voice (optional, off by default):** with `AI_PROVIDER=groq`, EDITH can speak with Groq's Orpheus voice
 (choose Hannah, Diana, Autumn, Daniel, Austin or Troy, then **▶ Test voice**). It's about a second
 slower than the phone voice and uses Groq quota. If the server can't produce it, EDITH automatically
 uses the phone voice. If *Test voice* reports an error from Groq, open <https://console.groq.com>,

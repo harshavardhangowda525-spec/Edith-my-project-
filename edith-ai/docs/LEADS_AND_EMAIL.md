@@ -98,6 +98,29 @@ to get around the block.
    ```
    (Replace `N` with the build number.) `Success` means it's installed. You can turn USB debugging off again.
 
+**No computer? Install it from the phone itself (Android 11+, about 15 minutes, once):**
+This uses Android's own *Wireless debugging*, the same method as the PC, run on the phone.
+1. Install **Termux** from F-Droid: <https://f-droid.org/packages/com.termux/> (the Play Store version
+   is outdated). Open it and run:
+   ```bash
+   pkg update && pkg install android-tools
+   termux-setup-storage
+   ```
+2. Connect to Wi-Fi. **Settings → Developer options → Wireless debugging → On** (turn on Developer
+   options first: tap *Build number* 7 times).
+3. Put **Settings and Termux side by side** (split screen), because the pairing code disappears if you leave
+   Settings. Tap **Pair device with pairing code**, then in Termux run (use the numbers shown):
+   ```bash
+   adb pair 127.0.0.1:PAIRING_PORT PAIRING_CODE
+   ```
+4. Then connect with the port shown on the main *Wireless debugging* screen, and install the file you
+   downloaded in your browser:
+   ```bash
+   adb connect 127.0.0.1:PORT
+   adb install -r ~/storage/downloads/EDITH-N-full-install-from-PC.apk
+   ```
+   `Success` = done. Turn Wireless debugging off again afterwards.
+
 Then turn on auto-send in the EDITH app (section 4 → **Allow WhatsApp auto-send**):
 1. Read the explanation → **Continue** → **Installed apps / Downloaded apps** → **EDITH WhatsApp
    auto-send** → turn on.

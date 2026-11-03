@@ -148,7 +148,7 @@ class EdithService : Service() {
         routing = AudioRouting(this)
         createChannel()
         tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) tts?.language = Locale.getDefault()
+            if (status == TextToSpeech.SUCCESS) tts?.let { PhoneVoice.apply(it, Prefs(this)) }
             ttsReady.countDown()
         }
     }
@@ -1143,11 +1143,14 @@ class EdithService : Service() {
     /** Speaks through the current audio output (your headphones when connected) and waits until done. */
     /** Set when the server has no voice model, so we stop trying for this session. */
     @Volatile private var humanVoiceUnavailable = false
+    /** After a quota/rate-limit error, use the phone voice for a while instead of retrying every sentence. */
+    @Volatile private var humanVoicePausedUntil = 0L
 
     private fun speak(text: String, style: String? = null) {
         if (text.isBlank()) return
         val prefs = Prefs(this)
-        if (prefs.humanVoice && !humanVoiceUnavailable && text.length <= 1200 && speakHuman(text, style, prefs)) return
+        val human = prefs.humanVoice && !humanVoiceUnavailable && System.currentTimeMillis() > humanVoicePausedUntil
+        if (human && text.length <= 1200 && speakHuman(text, style, prefs)) return
         speakDevice(text)
     }
 
@@ -1156,6 +1159,10 @@ class EdithService : Service() {
         val audio = try {
             EdithApi(prefs.serverUrl, prefs.password).speakAudio(text, prefs.voiceName, style)
         } catch (e: EdithException) {
+            if (e.message?.contains("rate limit", true) == true || e.message?.contains("quota", true) == true) {
+                humanVoicePausedUntil = System.currentTimeMillis() + 15 * 60_000
+                EdithState.log("Human voice limit reached – phone voice for 15 minutes")
+            }
             if (e.message?.contains("not available", true) == true || e.message?.contains("not configured", true) == true) {
                 humanVoiceUnavailable = true
                 EdithState.log("Human voice unavailable on the server – using the phone voice")
@@ -1192,6 +1199,7 @@ class EdithService : Service() {
     private fun speakDevice(text: String) {
         val engine = tts ?: return
         if (!ttsReady.await(5, TimeUnit.SECONDS)) return
+        PhoneVoice.apply(engine, Prefs(this))
         val usage = if (routing.headsetActive) AudioAttributes.USAGE_VOICE_COMMUNICATION
         else AudioAttributes.USAGE_ASSISTANT
         engine.setAudioAttributes(

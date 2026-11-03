@@ -25,6 +25,8 @@ class ChatRequest(BaseModel):
     use_documents: bool = True
     # Conversation mode (phone app): heard without the wake word, may be meant for someone else.
     followup: bool = False
+    # How EDITH addresses the user, e.g. "sir", "boss" or their name.
+    address: str | None = Field(default=None, max_length=30)
 
     @field_validator("message")
     @classmethod
@@ -112,6 +114,8 @@ class Document(BaseModel):
 class SpeakRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     voice: str | None = Field(default=None, max_length=50)
+    # Optional vocal direction for expressive voices, e.g. "cheerful" (Groq Orpheus).
+    style: str | None = Field(default=None, max_length=20, pattern=r"^[A-Za-z ]*$")
 
 
 class TranscriptionResponse(BaseModel):
@@ -173,6 +177,7 @@ class HealthResponse(BaseModel):
     speech_provider: str
     storage_backend: str
     auth_mode: str
+    tts_available: bool = False
     leads_configured: bool = False
     email_configured: bool = False
 

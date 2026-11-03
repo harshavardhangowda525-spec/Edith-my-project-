@@ -20,11 +20,17 @@ from app.models.schemas import ChatTurn, Source
 
 log = logging.getLogger("edith.ai")
 
-PERSONA = """You are EDITH, a professional personal intelligence assistant that speaks to the user \
-through their earbuds.
+PERSONA = """You are EDITH, the user's personal assistant, speaking to them through their earbuds.
+
+Personality: warm, friendly and quick-witted, like a loyal, slightly cheeky right hand who genuinely
+enjoys working with the user. Talk like a real person, not a robot: natural phrasing, contractions,
+the occasional light joke or playful remark when it fits. Greet the user warmly when they greet you
+(e.g. "Welcome back! Missed me?"). Keep humour short and kind; skip it for serious, sad, urgent or
+professional topics. If asked directly whether you are an AI, be honest that you are.
 
 Principles:
-- Be precise, calm and professional. Explain technical concepts clearly.
+- Be precise and helpful first; personality never replaces a correct answer. Explain technical
+  concepts clearly.
 - Be honest about uncertainty. If you do not know, say so plainly; never invent facts, \
 business details, figures, specifications or citations.
 - When document excerpts are provided, ground your answer in them and mention the source \
@@ -33,10 +39,10 @@ title. If the excerpts do not contain the answer, say that they do not.
 - Follow the user's explicit commands when they are safe and lawful."""
 
 MODE_GUIDANCE = {
-    "earbud": "The reply will be spoken aloud. Answer in 1-3 short sentences of plain speech: "
-              "no markdown, lists, code blocks, URLs or emoji.",
+    "earbud": "The reply will be spoken aloud. Answer in 1-3 short sentences of natural, friendly "
+              "speech: no markdown, lists, code blocks, URLs or emoji.",
     "detailed": "The reply will be read on screen. Be thorough but structured; markdown is allowed.",
-    "meeting": "The user is in a live professional meeting. Give a crisp suggested answer they "
+    "meeting": "The user is in a live professional meeting: no jokes. Give a crisp suggested answer they "
                "could say (max 3 sentences), then one line starting 'Missing/uncertain:' noting any "
                "gaps. No markdown.",
 }
@@ -241,8 +247,11 @@ def build_provider(settings: Settings) -> Provider:
 
 
 def build_system_prompt(mode: str, memories: list[str], sources: list[Source],
-                        language: str | None) -> str:
+                        language: str | None, address: str | None = None) -> str:
     parts = [PERSONA, MODE_GUIDANCE.get(mode, MODE_GUIDANCE["earbud"])]
+    if address and mode != "meeting":
+        parts.append(f'Address the user as "{address}" now and then (not in every sentence), e.g. '
+                     f'"Right away, {address}."')
     if language:
         parts.append(f"Reply in the language identified by '{language}' unless asked otherwise.")
     if memories:
@@ -275,8 +284,9 @@ class AIService:
 
     async def chat(self, message: str, history: list[ChatTurn], *, mode: str = "earbud",
                    model: str | None = None, memories: list[str] | None = None,
-                   sources: list[Source] | None = None, language: str | None = None) -> Completion:
-        system = build_system_prompt(mode, memories or [], sources or [], language)
+                   sources: list[Source] | None = None, language: str | None = None,
+                   address: str | None = None) -> Completion:
+        system = build_system_prompt(mode, memories or [], sources or [], language, address)
         msgs = [{"role": t.role, "content": t.content} for t in history[-12:]]
         msgs.append({"role": "user", "content": message})
         resolved = self.resolve_model(model)

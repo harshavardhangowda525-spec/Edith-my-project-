@@ -75,6 +75,32 @@ class Prefs(context: Context) {
         contactAliases = contactAliases + (PhoneActions.normalise(spoken).removePrefix("my ").trim() to contactName)
     }
 
+    /** How EDITH addresses you ("sir", "boss", your name). */
+    var address: String
+        get() = (p.getString("address", "sir") ?: "sir").ifBlank { "sir" }
+        set(v) = p.edit().putString("address", v.trim().take(30)).apply()
+
+    /** Natural, human-like voice from the server (Groq Orpheus); falls back to the phone voice. */
+    var humanVoice: Boolean
+        get() = p.getBoolean("human_voice", true)
+        set(v) = p.edit().putBoolean("human_voice", v).apply()
+
+    /** Orpheus voice: autumn, diana, hannah, austin, daniel, troy. */
+    var voiceName: String
+        get() = p.getString("voice_name", "hannah") ?: "hannah"
+        set(v) = p.edit().putString("voice_name", v).apply()
+
+    /** Names/words EDITH should recognise (comma separated), sent as spelling hints to speech-to-text. */
+    var extraWords: String
+        get() = p.getString("extra_words", "") ?: ""
+        set(v) = p.edit().putString("extra_words", v.take(400)).apply()
+
+    /** Spelling hints for speech-to-text: your name from About me + your words. */
+    fun hearingHints(): String {
+        val name = Regex("(?i)my name is ([\\p{L}]+(?: [\\p{L}]+)?)").find(aboutMe)?.groupValues?.get(1)
+        return listOfNotNull("EDITH", name, extraWords.takeIf { it.isNotBlank() }).joinToString(", ")
+    }
+
     /** What is missing before EDITH can listen, or null when ready. */
     fun missing(): String? = when {
         serverUrl.isBlank() -> "Enter your EDITH server address."

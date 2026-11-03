@@ -77,7 +77,7 @@ apps from a browser or file manager if they use Accessibility**. Auto-send needs
 | File on the Releases page | Install from | WhatsApp |
 |---|---|---|
 | `EDITH-N.apk` (**normal**, recommended) | your phone, as usual | EDITH types the message, **you tap Send** |
-| `EDITH-N-full-install-from-PC.apk` | a computer with a USB cable | EDITH also **presses Send** |
+| `EDITH-N-full-install-from-PC.apk` | a computer with a USB cable | EDITH also **presses Send**, and can type dictated text into any app (Instagram, Notes…) |
 
 Both share the same settings, and either one installs over the other. Don't turn off Play Protect
 to get around the block.

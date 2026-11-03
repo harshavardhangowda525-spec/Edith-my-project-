@@ -15,6 +15,7 @@ router = APIRouter(prefix="/api/voice", tags=["voice"])
 async def transcribe(
     audio: UploadFile = File(...),
     language: str | None = Form(default=None, max_length=20),
+    prompt: str | None = Form(default=None, max_length=800),
     user: AuthenticatedUser = Depends(rate_limited_user),
     speech: SpeechService = Depends(get_speech),
     settings: Settings = Depends(get_settings_dep),
@@ -24,7 +25,7 @@ async def transcribe(
     if len(data) > settings.max_audio_bytes:
         raise ValidationFailed("Audio file is too large", status_code=413)
     text = await speech.transcribe(data, audio.filename or "audio.webm",
-                                   audio.content_type or "", language)
+                                   audio.content_type or "", language, prompt)
     return TranscriptionResponse(text=text, provider=speech.provider.name)
 
 
@@ -35,5 +36,5 @@ async def speak(
     speech: SpeechService = Depends(get_speech),
 ) -> Response:
     """Generate speech audio (server-side provider). Returns audio/mpeg."""
-    audio, media_type = await speech.speak(body.text, body.voice)
+    audio, media_type = await speech.speak(body.text, body.voice, body.style)
     return Response(content=audio, media_type=media_type, headers={"Cache-Control": "no-store"})

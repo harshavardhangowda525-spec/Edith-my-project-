@@ -23,7 +23,8 @@ async def chat(
     memories = memory.for_prompt(user.id) if body.use_memory else []
     sources = retrieval.search(user.id, body.message) if body.use_documents else []
     result = await ai.chat(body.message, body.history, mode=body.mode, model=body.model,
-                           memories=memories, sources=sources, language=body.language)
+                           memories=memories, sources=sources, language=body.language,
+                           address=body.address)
     return ChatResponse(reply=result.text, model=result.model, provider=result.provider,
                         mock=result.mock, sources=sources, memories_used=len(memories))
 
@@ -61,7 +62,8 @@ async def assistant(
     sources = retrieval.search(user.id, message) if body.use_documents else []
     prompt = message if directed else message + command_service.FOLLOWUP_NOTE
     result = await ai.chat(prompt, body.history, mode=body.mode, model=body.model,
-                           memories=memories, sources=sources, language=body.language)
+                           memories=memories, sources=sources, language=body.language,
+                           address=body.address)
     if not directed and command_service.NOT_FOR_ME in result.text.upper().replace(" ", "_"):
         return AssistantResponse(kind="ignore", model=result.model, mock=result.mock)
     return AssistantResponse(kind="answer", reply=result.text, model=result.model, mock=result.mock,

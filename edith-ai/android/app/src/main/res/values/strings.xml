@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="whatsapp_sender_label">EDITH WhatsApp auto-send</string>
-    <string name="whatsapp_sender_description">Lets EDITH press Send in WhatsApp for a message you just confirmed by voice. It can only see WhatsApp, does nothing unless you said \"yes\" to a message in the last 20 seconds, and only sends when the typed text is exactly that message.</string>
+    <string name="whatsapp_sender_label">EDITH typing &amp; Send</string>
+    <string name="whatsapp_sender_description">Lets EDITH type what you dictate into the open app (WhatsApp, Instagram, Notes or any app with a text box) and press Send after you say \"yes\". It only acts right after you give EDITH a typing command, never types into password fields, and does not read, store or upload what is on your screen.</string>
 </resources>

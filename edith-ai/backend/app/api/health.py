@@ -20,6 +20,7 @@ def health(settings: Settings = Depends(get_settings_dep)) -> HealthResponse:
         speech_provider=settings.speech_kind,
         storage_backend=settings.storage_backend,
         auth_mode=settings.auth_mode,
+        tts_available=settings.speech_kind in ("openai", "groq"),
         leads_configured=settings.leads_configured,
         email_configured=settings.email_configured,
     )

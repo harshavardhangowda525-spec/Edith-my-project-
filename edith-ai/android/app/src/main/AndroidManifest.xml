@@ -51,6 +51,22 @@
         <package android:name="com.amazon.mp3" />
         <package android:name="com.apple.android.music" />
         <package android:name="com.google.android.apps.maps" />
+        <package android:name="com.instagram.android" />
+        <package android:name="com.google.android.keep" />
+        <package android:name="com.samsung.android.app.notes" />
+        <package android:name="com.miui.notes" />
+        <package android:name="com.microsoft.office.onenote" />
+        <package android:name="com.socialnmobile.dangerous.colornote" />
+        <package android:name="com.oneplus.note" />
+        <package android:name="com.coloros.note" />
+        <package android:name="com.vivo.notes" />
+        <intent>
+            <action android:name="com.google.android.gms.actions.CREATE_NOTE" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
     </queries>
 
     <application

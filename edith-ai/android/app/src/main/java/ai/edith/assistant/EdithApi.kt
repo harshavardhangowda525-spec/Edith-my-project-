@@ -23,10 +23,16 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         request("GET", "/api/memory/settings")
     }
 
-    fun transcribe(wav: ByteArray, language: String?): String {
+    fun transcribe(wav: ByteArray, language: String?, hints: String? = null): String {
         val boundary = "edith" + System.currentTimeMillis()
         val body = ByteArrayOutputStream().apply {
             fun line(s: String) = write((s + "\r\n").toByteArray())
+            if (!hints.isNullOrBlank()) {
+                line("--$boundary")
+                line("Content-Disposition: form-data; name=\"prompt\"")
+                line("")
+                line(hints.take(700))
+            }
             if (!language.isNullOrBlank()) {
                 line("--$boundary")
                 line("Content-Disposition: form-data; name=\"language\"")
@@ -64,11 +70,13 @@ class EdithApi(private val baseUrl: String, private val password: String) {
      * Voice entry point: a phone action to perform, or a spoken answer.
      * followup = heard in conversation mode without the wake word (may be meant for someone else).
      */
-    fun assistant(message: String, history: List<Turn>, language: String?, followup: Boolean = false): Assistant {
+    fun assistant(message: String, history: List<Turn>, language: String?, followup: Boolean = false,
+                  address: String? = null): Assistant {
         val payload = JSONObject()
             .put("message", message)
             .put("mode", "earbud")
             .put("followup", followup)
+        if (!address.isNullOrBlank()) payload.put("address", address)
             .put("history", JSONArray().apply {
                 history.takeLast(12).forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
             })
@@ -94,6 +102,14 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         val body = JSONObject(lead.toString()).put("status", status)
         listOf("rating", "reviews").forEach { if (body.isNull(it)) body.remove(it) }
         request("POST", "/api/leads", body.toString().toByteArray(), "application/json")
+    }
+
+    /** Human-like speech (WAV/MP3 bytes) from the server's voice model. */
+    fun speakAudio(text: String, voice: String?, style: String? = null): ByteArray {
+        val payload = JSONObject().put("text", text.take(2400))
+        if (!voice.isNullOrBlank()) payload.put("voice", voice)
+        if (!style.isNullOrBlank()) payload.put("style", style)
+        return requestBytes("POST", "/api/voice/speak", payload.toString().toByteArray(), "application/json")
     }
 
     data class EmailDraft(val subject: String, val body: String)
@@ -144,7 +160,12 @@ class EdithApi(private val baseUrl: String, private val password: String) {
     private fun request(
         method: String, path: String, body: ByteArray? = null,
         contentType: String? = null, auth: Boolean = true,
-    ): String {
+    ): String = String(requestBytes(method, path, body, contentType, auth))
+
+    private fun requestBytes(
+        method: String, path: String, body: ByteArray? = null,
+        contentType: String? = null, auth: Boolean = true,
+    ): ByteArray {
         val conn = try {
             URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
         } catch (e: Exception) {
@@ -163,13 +184,14 @@ class EdithApi(private val baseUrl: String, private val password: String) {
             }
             val code = conn.responseCode
             val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() } ?: ""
+            val bytes = stream?.use { it.readBytes() } ?: ByteArray(0)
+            val text = if (code in 200..299) "" else String(bytes)
             if (code !in 200..299) {
                 val msg = runCatching { JSONObject(text).getJSONObject("error").getString("message") }
                     .getOrDefault("Server error (HTTP $code)")
                 throw EdithException(if (code == 401) "Wrong EDITH password." else msg)
             }
-            return text
+            return bytes
         } catch (e: EdithException) {
             throw e
         } catch (e: UnknownHostException) {

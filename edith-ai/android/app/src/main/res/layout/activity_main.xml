@@ -83,6 +83,54 @@
             style="@style/Hint"
             android:text="EDITH pauses (microphone off) whenever your headphones are not connected, and resumes by itself when they are. To use other headphones, pair them with the phone, then register them here." />
 
+        <!-- ===== Personality & voice ===== -->
+        <TextView style="@style/Section" android:text="EDITH's voice &amp; hearing" />
+
+        <TextView style="@style/Label" android:text="EDITH calls you" />
+        <EditText
+            android:id="@+id/address"
+            style="@style/Input"
+            android:hint="sir"
+            android:inputType="textCapWords" />
+
+        <CheckBox
+            android:id="@+id/humanVoice"
+            style="@style/Radio"
+            android:text="Human-like voice (needs AI_PROVIDER=groq on the server)" />
+
+        <RadioGroup
+            android:id="@+id/voiceName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+            <RadioButton android:id="@+id/vHannah" style="@style/Radio" android:text="Hannah (female)" />
+            <RadioButton android:id="@+id/vDiana" style="@style/Radio" android:text="Diana (female)" />
+            <RadioButton android:id="@+id/vAutumn" style="@style/Radio" android:text="Autumn (female)" />
+            <RadioButton android:id="@+id/vDaniel" style="@style/Radio" android:text="Daniel (male)" />
+            <RadioButton android:id="@+id/vAustin" style="@style/Radio" android:text="Austin (male)" />
+            <RadioButton android:id="@+id/vTroy" style="@style/Radio" android:text="Troy (male)" />
+        </RadioGroup>
+
+        <Button
+            android:id="@+id/testVoice"
+            style="@style/SmallButton"
+            android:text="▶ Test voice" />
+
+        <TextView style="@style/Label" android:text="Words EDITH should recognise (names, places, brands)" />
+        <EditText
+            android:id="@+id/extraWords"
+            style="@style/Input"
+            android:hint="e.g. Harsha, Indiranagar, Supabase, Rahul Sharma"
+            android:inputType="text" />
+
+        <Button
+            android:id="@+id/hearingTest"
+            style="@style/SmallButton"
+            android:text="🎧 Hearing test (see what EDITH hears)" />
+
+        <TextView
+            style="@style/Hint"
+            android:text="Tip: Bluetooth earbud microphones send call-quality audio. If EDITH mishears you, choose “Phone microphone” in section 3." />
+
         <!-- ===== Server ===== -->
         <TextView style="@style/Section" android:text="1 · Your EDITH server" />
 
@@ -186,7 +234,7 @@
         <Button
             android:id="@+id/allowWhatsApp"
             style="@style/SmallButton"
-            android:text="Allow WhatsApp auto-send (Accessibility, WhatsApp only)" />
+            android:text="Allow typing &amp; Send in apps (full edition)" />
 
         <TextView
             style="@style/Hint"

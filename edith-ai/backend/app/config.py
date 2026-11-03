@@ -42,8 +42,15 @@ ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
 # Server speech-to-text services (OpenAI-compatible /audio/transcriptions): (base_url, stt_model)
 SPEECH_PRESETS: dict[str, tuple[str, str]] = {
     "openai": (OPENAI_DEFAULT_URL, "whisper-1"),
-    "groq": ("https://api.groq.com/openai/v1", "whisper-large-v3-turbo"),
+    # whisper-large-v3: Groq lists 10.3% word error rate vs 12% for -turbo; accuracy matters for voice.
+    "groq": ("https://api.groq.com/openai/v1", "whisper-large-v3"),
 }
+# Server text-to-speech: (model, default voice, max characters per request)
+TTS_PRESETS: dict[str, tuple[str, str, int]] = {
+    "openai": ("tts-1", "alloy", 4000),
+    "groq": ("canopylabs/orpheus-v1-english", "hannah", 200),
+}
+GROQ_VOICES = ("autumn", "diana", "hannah", "austin", "daniel", "troy")
 SUPPORTED_AI_PROVIDERS = ["openai", "anthropic", "mock", *OPENAI_COMPATIBLE_PRESETS]
 
 
@@ -78,8 +85,8 @@ class Settings(BaseSettings):
     speech_api_key: str | None = None
     speech_base_url: str = ""
     stt_model: str = ""
-    tts_model: str = "tts-1"
-    tts_voice: str = "alloy"
+    tts_model: str = ""
+    tts_voice: str = ""
     max_audio_bytes: int = 10 * 1024 * 1024
 
     # --- Authentication -------------------------------------------------------
@@ -202,6 +209,18 @@ class Settings(BaseSettings):
     def speech_base(self) -> str:
         return (self.speech_base_url.strip().rstrip("/")
                 or SPEECH_PRESETS.get(self.speech_kind, (OPENAI_DEFAULT_URL, ""))[0])
+
+    @property
+    def tts_model_name(self) -> str:
+        return self.tts_model.strip() or TTS_PRESETS.get(self.speech_kind, ("tts-1", "", 0))[0]
+
+    @property
+    def tts_voice_name(self) -> str:
+        return self.tts_voice.strip() or TTS_PRESETS.get(self.speech_kind, ("", "alloy", 0))[1]
+
+    @property
+    def tts_max_chars(self) -> int:
+        return TTS_PRESETS.get(self.speech_kind, ("", "", 4000))[2]
 
     @property
     def stt_model_name(self) -> str:

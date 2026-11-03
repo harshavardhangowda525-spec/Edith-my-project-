@@ -45,6 +45,10 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
         data class Do(val say: String, val sayAfter: Boolean = false, val run: () -> String?) : Plan()
         data class Call(val contact: Contact) : Plan()
         data class Fail(val say: String) : Plan()
+        /** Run [first], then continue with the plan made by [next]. */
+        data class Chain(val first: Plan, val next: () -> Plan) : Plan()
+        /** Ask [prompt], record a longer dictation, then continue with [then] (the dictated text). */
+        data class Dictate(val prompt: String, val then: (String) -> Plan) : Plan()
         /** Several contacts match [spoken]: ask which one, then continue with [then]. */
         data class Choose(val spoken: String, val options: List<Contact>, val then: (Contact) -> Plan) : Plan()
         /** Read back [prompt] and only run [onYes] after the user says "yes". */
@@ -60,6 +64,16 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
             else Plan.Leads(q)
         }
         "whatsapp" -> planWhatsApp(action.optString("to"), action.optString("message"))
+        "note" -> action.optString("text").trim().let { t ->
+            if (t.isBlank()) Plan.Dictate("What should I write, ${prefs.address}?") { planNote(it) } else planNote(t)
+        }
+        "type_text" -> action.optString("text").trim().let { t ->
+            if (t.isBlank()) Plan.Dictate("What should I type, ${prefs.address}?") { planType(it, null) } else planType(t, null)
+        }
+        "instagram" -> action.optString("message").trim().let { t ->
+            if (t.isBlank()) Plan.Dictate("What should I type on Instagram, ${prefs.address}?") { planInstagram(it) }
+            else planInstagram(t)
+        }
         "email" -> planEmail(action.optString("to"), action.optString("message"))
         "open_app" -> planOpenApp(action.optString("app"))
         "play_music" -> planMusic(action)
@@ -242,6 +256,9 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
     }
 
     private fun whatsAppTo(contact: Contact, message: String, pkg: String): Plan {
+        if (message.isBlank()) {
+            return Plan.Dictate("What should I say to ${contact.name}?") { whatsAppTo(contact, it, pkg) }
+        }
         val phone = whatsAppNumber(contact.number)
             ?: return Plan.Fail("${contact.name}'s number has no country code. Set your country code in EDITH settings.")
         val text = message.trim()
@@ -257,6 +274,88 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
                 err != null -> { WhatsAppSender.disarm(); err }
                 auto -> { EdithState.log("WhatsApp to ${contact.name}: opened, auto-send armed"); null }
                 else -> "The message is typed in WhatsApp. Tap send. To let me send it myself, turn on WhatsApp auto-send in EDITH."
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ notes, typing, Instagram
+
+    /** Creates a note in the phone's notes app (Google Keep etc.) with the dictated text. */
+    private fun planNote(text: String): Plan = Plan.Do("Noted, ${prefs.address}.") {
+        val createNote = Intent("com.google.android.gms.actions.CREATE_NOTE")
+            .putExtra(Intent.EXTRA_TEXT, text)
+            .putExtra(Intent.EXTRA_SUBJECT, text.take(40))
+        val share = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        val notesApp = NOTES_PACKAGES.firstOrNull { isInstalled(it) }
+        when {
+            createNote.resolveActivity(ctx.packageManager) != null -> launch(createNote, "your notes")
+            notesApp != null -> launch(share.setPackage(notesApp), "your notes")
+            else -> {
+                copyToClipboard(text)
+                "I couldn't find a notes app, so I copied it. Paste it wherever you like."
+            }
+        }
+    }
+
+    /**
+     * Types into the open app's text box (full edition), then offers to press Send.
+     * Standard edition: copies the text so you can paste it.
+     */
+    fun planType(text: String, expectPkg: String?): Plan {
+        val typer = WhatsAppSender.instance
+        if (!WhatsAppSender.ready(ctx) || typer == null) {
+            copyToClipboard(text)
+            return Plan.Do("I copied it, ${prefs.address}. Long-press the text box and tap Paste.") { null }
+        }
+        // Wait up to 20 s for a text box (e.g. while you open the chat).
+        val until = System.currentTimeMillis() + 20_000
+        while (System.currentTimeMillis() < until) {
+            val pkg = typer.foregroundPackage()
+            if ((expectPkg == null || pkg == expectPkg) && typer.hasInputBox()) break
+            Thread.sleep(400)
+        }
+        if (!typer.typeIntoFocused(text)) {
+            return Plan.Fail("I couldn't find a text box. Open the chat, tap the message box, then say type.")
+        }
+        EdithState.log("Typed into ${typer.foregroundPackage()}: ${text.take(40)}")
+        Thread.sleep(300)
+        return if (typer.hasSendButton()) {
+            Plan.Confirm("Typed: $text. Should I send it?", doneSay = "Sent.") {
+                if (typer.pressSend()) { EdithState.log("Pressed Send ✓"); null }
+                else "I couldn't find the Send button. Tap it yourself."
+            }
+        } else {
+            Plan.Do("Done, ${prefs.address}. It's typed.") { null }
+        }
+    }
+
+    private fun planInstagram(text: String): Plan {
+        val pkg = "com.instagram.android"
+        if (!isInstalled(pkg)) return Plan.Fail("Instagram isn't installed on this phone.")
+        if (WhatsAppSender.ready(ctx)) {
+            val typer = WhatsAppSender.instance
+            if (typer?.foregroundPackage() != pkg) {
+                ctx.packageManager.getLaunchIntentForPackage(pkg)?.let { launch(it, "Instagram") }
+                return Plan.Do("Opening Instagram. Open the chat and tap the message box; I'll type it.") {
+                    null
+                }.let { opening ->
+                    // After announcing, wait for the chat's text box and continue with typing.
+                    Plan.Chain(opening) { planType(text, pkg) }
+                }
+            }
+            return planType(text, pkg)
+        }
+        // Standard edition: Instagram's share screen, with the text, to pick who gets it.
+        val share = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text).setPackage(pkg)
+        copyToClipboard(text)
+        return Plan.Do("Pick who to send it to, ${prefs.address}. I also copied the text.") { launch(share, "Instagram") }
+    }
+
+    private fun copyToClipboard(text: String) {
+        runCatching {
+            Handler(Looper.getMainLooper()).post {
+                ctx.getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("EDITH", text))
             }
         }
     }
@@ -544,6 +643,12 @@ class PhoneActions(private val ctx: Context, private val prefs: Prefs, private v
                 else -> cc + n
             }?.takeIf { it.length in 8..15 }
         }
+
+        private val NOTES_PACKAGES = listOf(
+            "com.google.android.keep", "com.samsung.android.app.notes", "com.miui.notes",
+            "com.microsoft.office.onenote", "com.socialnmobile.dangerous.colornote", "com.oneplus.note",
+            "com.coloros.note", "com.vivo.notes",
+        )
 
         private val COUNTRY_CODES = mapOf(
             "in" to "91", "us" to "1", "ca" to "1", "gb" to "44", "ae" to "971", "sa" to "966", "au" to "61",

@@ -94,6 +94,23 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.READ_PHONE_STATE))
         }
         findViewById<Button>(R.id.testCall).setOnClickListener { testCall() }
+        bindText(R.id.address, prefs.address.takeIf { it != "sir" } ?: "") { prefs.address = it }
+        bindText(R.id.extraWords, prefs.extraWords) { prefs.extraWords = it }
+        findViewById<CheckBox>(R.id.humanVoice).apply {
+            isChecked = prefs.humanVoice
+            setOnCheckedChangeListener { _, v -> prefs.humanVoice = v }
+        }
+        val voices = mapOf(R.id.vHannah to "hannah", R.id.vDiana to "diana", R.id.vAutumn to "autumn",
+            R.id.vDaniel to "daniel", R.id.vAustin to "austin", R.id.vTroy to "troy")
+        findViewById<RadioGroup>(R.id.voiceName).apply {
+            check(voices.entries.firstOrNull { it.value == prefs.voiceName }?.key ?: R.id.vHannah)
+            setOnCheckedChangeListener { _, id -> prefs.voiceName = voices[id] ?: "hannah" }
+        }
+        findViewById<Button>(R.id.testVoice).setOnClickListener { testVoice() }
+        findViewById<Button>(R.id.hearingTest).setOnClickListener {
+            if (!EdithState.running) toast("Start EDITH first, then run the hearing test.")
+            else startService(Intent(this, EdithService::class.java).setAction(EdithService.ACTION_HEARING_TEST))
+        }
         findViewById<Button>(R.id.clearAliases).setOnClickListener {
             prefs.contactAliases = emptyMap()
             toast("Forgotten. EDITH will ask again when several contacts match.")
@@ -117,9 +134,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.allowWhatsApp).setOnClickListener {
             if (!BuildConfig.WHATSAPP_AUTO_SEND) {
                 androidx.appcompat.app.AlertDialog.Builder(this)
-                    .setTitle("WhatsApp auto-send")
-                    .setMessage("This edition types the WhatsApp message for you and you tap Send.\n\n" +
-                        "Pressing Send automatically needs the \"full\" edition. Google Play Protect blocks " +
+                    .setTitle("Typing & Send in apps")
+                    .setMessage("This edition opens WhatsApp with the message typed (you tap Send) and copies " +
+                        "dictated text for you to paste.\n\n" +
+                        "Typing into any app and pressing Send automatically needs the \"full\" edition. Google Play Protect blocks " +
                         "installing it from the phone (it uses Accessibility), so it has to be installed from a " +
                         "computer: see docs/LEADS_AND_EMAIL.md → WhatsApp.")
                     .setPositiveButton("OK", null)
@@ -128,12 +146,12 @@ class MainActivity : AppCompatActivity() {
             }
             if (WhatsAppSender.isEnabled(this)) { toast("Already allowed ✓"); return@setOnClickListener }
             androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("WhatsApp auto-send")
-                .setMessage("EDITH will be able to press Send in WhatsApp for a message you just confirmed by " +
-                    "saying \"yes\".\n\nAndroid limits this access to WhatsApp only: EDITH can't see any other " +
-                    "app. It does nothing unless you confirmed a message in the last 20 seconds, and only sends " +
-                    "when the typed text exactly matches.\n\nNext screen: Installed apps → EDITH WhatsApp " +
-                    "auto-send → turn on.")
+                .setTitle("Typing & Send in apps")
+                .setMessage("EDITH will be able to type what you dictate into the open app (WhatsApp, Instagram, " +
+                    "Notes or any app with a text box) and press Send after you say \"yes\".\n\n" +
+                    "It only acts right after you give EDITH a typing command, never types into password " +
+                    "fields, and doesn't read, store or upload your screen. This access is powerful: only turn " +
+                    "it on on your own phone.\n\nNext screen: Installed/Downloaded apps → EDITH typing & Send → turn on.")
                 .setPositiveButton("Continue") { _, _ ->
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
@@ -203,9 +221,9 @@ class MainActivity : AppCompatActivity() {
             EdithState.actionLog.joinToString("\n").ifBlank { "Nothing yet" }
         findViewById<TextView>(R.id.phoneStatus).text =
             "Calls: ${if (calls) "✓ allowed" else "off"}   ·   Open apps & music: ${if (apps) "✓ allowed" else "off"}" +
-                "   ·   WhatsApp auto-send: ${when {
+                "   ·   Typing & Send: ${when {
                     !BuildConfig.WHATSAPP_AUTO_SEND -> "full edition only"
-                    WhatsAppSender.isEnabled(this) -> "✓ on"
+                    WhatsAppSender.isEnabled(this) -> "✓ on (all apps)"
                     else -> "off"
                 }}"
         if (EdithState.running) {
@@ -227,6 +245,31 @@ class MainActivity : AppCompatActivity() {
             (EdithState.meetingMode || EdithState.status.startsWith("Conversation"))
         heard.text = if (showHeard) "Heard: ${EdithState.lastHeard}" else ""
         heard.visibility = if (showHeard) View.VISIBLE else View.GONE
+    }
+
+    /** Plays a sample of the selected human-like voice. */
+    private fun testVoice() {
+        prefs.missing()?.let { toast(it); return }
+        toast("Getting a sample…")
+        thread {
+            val msg = try {
+                val audio = EdithApi(prefs.serverUrl, prefs.password)
+                    .speakAudio("Hello ${prefs.address}! This is how I sound. Ready when you are.", prefs.voiceName, "cheerful")
+                val f = java.io.File(cacheDir, "voice-test.audio").apply { writeBytes(audio) }
+                android.media.MediaPlayer().apply {
+                    setDataSource(f.absolutePath)
+                    setOnCompletionListener { it.release(); f.delete() }
+                    prepare()
+                    start()
+                }
+                null
+            } catch (e: EdithException) {
+                "Human voice unavailable: ${e.message}"
+            } catch (e: Exception) {
+                "Couldn't play the sample: ${e.javaClass.simpleName}"
+            }
+            msg?.let { runOnUiThread { toast(it) } }
+        }
     }
 
     /** Pick which paired Bluetooth headphones EDITH may work with. */

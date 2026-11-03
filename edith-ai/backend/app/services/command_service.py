@@ -45,7 +45,7 @@ NUMBER_WORDS = {
 COMMAND_HINTS = re.compile(
     r"\b(call|phone|ring|dial|open|launch|start|play|pause|stop|resume|skip|next|previous|volume|"
     r"louder|quieter|mute|alarm|wake me|timer|navigate|directions|take me|drive me|music|song|"
-    r"leads?|prospects?|e-?mail|mail|whatsapp|message|text)\b"
+    r"leads?|prospects?|e-?mail|mail|whatsapp|message|text|note|notes|type|instagram|insta|dm)\b"
 )
 _LEADING = re.compile(
     r"^(?:(?:hey|ok|okay)\s+)?(?:edith[\s,]+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?"
@@ -96,10 +96,42 @@ _RAW_LEADING = re.compile(
 _SAY = r"(?:saying|that says|which says|telling (?:him|her|them)|to say|and say|that|:|-)"
 
 
+def parse_dictation(raw: str) -> dict[str, Any] | None:
+    """Notes, Instagram and "type ..." commands. An empty text means: ask what to type."""
+    r = raw.strip().rstrip(".")
+    # Notes: "take a note: buy milk", "open notes and type", "write a note saying ..."
+    m = re.match(r"^(?:open\s+(?:my\s+|the\s+)?notes?(?:\s+app)?\s+and\s+)?(?:take|make|write|create|add|type)"
+                 r"(?:\s+(?:down|in|into))?(?:\s+(?:a|an|the|my))?\s+(?:new\s+)?notes?\b\s*(?:saying|that says|that|:|-)?\s*(?P<t>.*)$",
+                 r, re.I) or \
+        re.match(r"^open\s+(?:my\s+|the\s+)?notes?(?:\s+app)?\s+and\s+(?:type|write|note down|take down)"
+                 r"(?:\s+(?:this|that|something|it|the following))?\s*(?:saying|:|-)?\s*(?P<t>.*)$", r, re.I) or \
+        re.match(r"^note\s+(?:this\s+)?down\s*:?\s*(?P<t>.*)$", r, re.I)
+    if m:
+        return {"type": "note", "text": m.group("t").strip()}
+    # Instagram: "open instagram and type hi", "send this on instagram: ...", "instagram message"
+    if re.search(r"\binstagram\b|\binsta\b", r, re.I) and re.search(r"\b(type|send|write|message|dm|text|reply)\b", r, re.I):
+        m = re.match(r"^(?:send|post|type|write)\s+(?:this|it|that)?\s*(?:on|in)\s+(?:instagram|insta)\s*(?:saying|:|-)?\s*(?P<t>.*)$", r, re.I) or re.match(r"^(?:open\s+(?:instagram|insta)\s+and\s+)?(?:type|send|write|reply|text)?\s*(?:an?\s+)?"
+                     r"(?:(?:instagram|insta)\s+)?(?:message|dm|text|reply)?\s*(?:on\s+(?:instagram|insta))?"
+                     r"\s*(?:saying|that says|that|:|-)?\s*(?P<t>.*?)(?:\s+on\s+(?:instagram|insta))?$", r, re.I)
+        text = (m.group("t") if m else "").strip()
+        if re.fullmatch(r"(?:(?:a|an|the)\s+)?(?:message|dm|text|something|this|that)?", text, re.I):
+            text = ""
+        return {"type": "instagram", "message": text}
+    # Generic typing into the open app: "type hello there", "type this", "type"
+    m = re.match(r"^(?:type|write|dictate)(?:\s+(?:this|that|it|the following|for me|here|in\s+(?:the\s+)?"
+                 r"(?:chat|box|text\s+box|field|message\s+box)))*\s*(?:saying|:|-)?\s*(?P<t>.*)$", r, re.I)
+    if m and not re.match(r"^(?:write|type)\s+(?:an?\s+)?(?:e-?mail|mail|whatsapp|message|text|letter|essay|code|program|story|poem)\b", r, re.I):
+        return {"type": "type_text", "text": m.group("t").strip()}
+    return None
+
+
 def parse_message(text: str) -> dict[str, Any] | None:
     """WhatsApp messages and emails. Uses the original casing so the message reads naturally."""
     raw = _RAW_LEADING.sub("", text.strip()).strip()
     raw = re.sub(r"\s+(?:please)\.?$", "", raw, flags=re.I)
+    dictation = parse_dictation(raw)
+    if dictation:
+        return dictation
     patterns = [
         # email
         ("email", rf"^(?:send|write)?\s*(?:an?\s+)?(?:e-?mail|mail)\s+(?:to\s+)?(?P<to>[^:]+?)\s*(?:{_SAY}|(?=about\s|regarding\s))\s*(?P<msg>.+)$"),
@@ -112,6 +144,12 @@ def parse_message(text: str) -> dict[str, Any] | None:
                      rf"\s*{_SAY}?\s*(?P<msg>.+)$"),
         ("whatsapp", rf"^(?:on\s+)?whatsapp\s+(?P<to>[^:]+?)\s*{_SAY}\s*(?P<msg>.+)$"),
     ]
+    # "WhatsApp Rahul", "open WhatsApp and send a message to Rahul": EDITH will ask what to type.
+    m = re.match(r"^(?:open\s+whatsapp\s+and\s+)?(?:send|write|type)\s+(?:an?\s+)?(?:whatsapp\s+)?message\s+(?:to|for)\s+"
+                 r"(?P<to>[^,]+?)(?:\s+on\s+whatsapp)?\.?$", raw, re.I) or \
+        re.match(r"^(?:whatsapp|message)\s+(?P<to>[A-Za-z][\w']*(?:\s+[A-Za-z][\w']*)?)\.?$", raw, re.I)
+    if m and not re.search(r"\b(saying|that says|:)\b", raw, re.I):
+        return {"type": "whatsapp", "to": m.group("to").strip(" ,."), "message": ""}
     for kind, pat in patterns:
         m = re.match(pat, raw, re.I)
         if not m:
@@ -241,11 +279,14 @@ If it is a request to control the phone, reply with ONLY one JSON object, no oth
 {{"type":"navigate","destination":"<place>"}}
 {{"type":"find_leads","query":"<business type and area, e.g. dentists in Indiranagar Bangalore>"}}
 {{"type":"email","to":"<contact name or email address>","message":"<what the email should say>"}}
-{{"type":"whatsapp","to":"<contact name>","message":"<exact message text>"}}
+{{"type":"whatsapp","to":"<contact name>","message":"<exact message text, or empty to ask>"}}
+{{"type":"note","text":"<note text, or empty to ask>"}}
+{{"type":"instagram","message":"<message text, or empty to ask>"}}
+{{"type":"type_text","text":"<text to type into the open app, or empty to ask>"}}
 If it is NOT a phone command (a question, a chat, anything else) reply with exactly: {{"type":"none"}}"""
 
 _ALLOWED_TYPES = {"call", "open_app", "play_music", "media", "alarm", "timer", "navigate",
-                  "find_leads", "email", "whatsapp"}
+                  "find_leads", "email", "whatsapp", "note", "instagram", "type_text"}
 
 
 def validate_action(a: Any) -> dict[str, Any] | None:
@@ -273,9 +314,16 @@ def validate_action(a: Any) -> dict[str, Any] | None:
         return out
     if t == "find_leads":
         return {"type": t, "query": s("query", 200)}
-    if t in ("email", "whatsapp"):
-        to, msg = s("to", 200), s("message", 2000 if t == "email" else 1000)
+    if t == "email":
+        to, msg = s("to", 200), s("message", 2000)
         return {"type": t, "to": to, "message": msg} if to and msg else None
+    if t == "whatsapp":  # an empty message means: ask the user what to type
+        to = s("to", 200)
+        return {"type": t, "to": to, "message": s("message", 1000)} if to else None
+    if t in ("note", "type_text"):
+        return {"type": t, "text": s("text", 4000)}
+    if t == "instagram":
+        return {"type": t, "message": s("message", 1000)}
     if t == "media":
         c = s("command")
         return {"type": t, "command": c} if c in MEDIA_COMMANDS else None
@@ -353,7 +401,13 @@ def describe(action: dict[str, Any]) -> str:
     if t == "email":
         return f"Writing an email to {action['to']}."
     if t == "whatsapp":
-        return f"WhatsApp to {action['to']}: {action['message']}"
+        return f"WhatsApp to {action['to']}: {action['message']}" if action.get("message") else f"Message for {action['to']}."
+    if t == "note":
+        return "Noted." if action.get("text") else "What should I write?"
+    if t == "type_text":
+        return "Typing it." if action.get("text") else "What should I type?"
+    if t == "instagram":
+        return "Instagram message." if action.get("message") else "What should I type on Instagram?"
     return "Okay."
 
 

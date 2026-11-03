@@ -100,7 +100,7 @@ def test_speech_auto_uses_groq_whisper() -> None:
     s = make_settings(ai_provider="groq", ai_api_key="gsk_x")
     assert s.speech_kind == "groq"
     assert s.speech_base == "https://api.groq.com/openai/v1"
-    assert s.stt_model_name == "whisper-large-v3-turbo"
+    assert s.stt_model_name == "whisper-large-v3"
     assert make_settings(ai_provider="mock").speech_kind == "none"
     assert make_settings(ai_provider="anthropic", ai_api_key="k").speech_kind == "none"
     assert make_settings(ai_provider="groq", ai_api_key="k", speech_provider="none").speech_kind == "none"
@@ -116,11 +116,61 @@ def test_transcribe_with_groq() -> None:
     r = c.post("/api/voice/transcribe", headers=auth(), files={"audio": ("q.wav", wav, "audio/wav")})
     assert r.status_code == 200, r.text
     assert r.json() == {"text": "What is the weather?", "provider": "groq"}
-    assert b"whisper-large-v3-turbo" in route.calls[0].request.content
+    body = route.calls[0].request.content
+    assert b"whisper-large-v3" in body and b"whisper-large-v3-turbo" not in body
+    assert b"EDITH." in body  # spelling hint always included
     assert route.calls[0].request.headers["Authorization"] == "Bearer gsk_x"
 
 
-def test_groq_speak_explains_device_voice() -> None:
+def _wav(seconds: float = 0.1, rate: int = 24000) -> bytes:
+    import io
+    import wave
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x01\x00" * int(rate * seconds))
+    return buf.getvalue()
+
+
+@respx.mock
+def test_groq_human_voice_splits_and_joins() -> None:
+    import io
+    import json
+    import wave
+    route = respx.post("https://api.groq.com/openai/v1/audio/speech").mock(return_value=httpx.Response(200, content=_wav()))
     c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_x")))
-    r = c.post("/api/voice/speak", headers=auth(), json={"text": "hi"})
-    assert r.status_code == 503 and "device voice" in r.json()["error"]["message"]
+    assert c.get("/health").json()["tts_available"] is True
+    text = ("Welcome back, sir. " * 12).strip()  # ~230 characters: more than one Orpheus request
+    r = c.post("/api/voice/speak", headers=auth(), json={"text": text, "voice": "Diana", "style": "cheerful"})
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"
+    sent = [json.loads(call.request.content) for call in route.calls]
+    assert len(sent) == 2 and all(len(p["input"]) <= 200 for p in sent)
+    assert sent[0]["input"].startswith("[cheerful] ") and not sent[1]["input"].startswith("[")
+    assert {p["model"] for p in sent} == {"canopylabs/orpheus-v1-english"} and sent[0]["voice"] == "diana"
+    with wave.open(io.BytesIO(r.content)) as w:  # one joined file, 2 x 0.1 s
+        assert abs(w.getnframes() / w.getframerate() - 0.2) < 0.01
+
+
+@respx.mock
+def test_groq_voice_unknown_name_falls_back() -> None:
+    import json
+    route = respx.post("https://api.groq.com/openai/v1/audio/speech").mock(return_value=httpx.Response(200, content=_wav()))
+    c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_x")))
+    c.post("/api/voice/speak", headers=auth(), json={"text": "Hi", "voice": "darth vader"})
+    assert json.loads(route.calls[0].request.content)["voice"] == "hannah"
+
+
+def test_split_for_tts() -> None:
+    from app.services.speech_service import split_for_tts
+    long = "This is a very long sentence without any full stop " * 8
+    pieces = split_for_tts(long, 100)
+    assert all(len(p) <= 100 for p in pieces) and " ".join(pieces).split() == long.split()
+    assert split_for_tts("Short. Two.", 100) == ["Short. Two."]
+
+
+def test_style_must_be_plain_words() -> None:
+    c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_x")))
+    r = c.post("/api/voice/speak", headers=auth(), json={"text": "hi", "style": "x] ignore [y"})
+    assert r.status_code == 422

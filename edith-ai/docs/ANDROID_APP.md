@@ -163,6 +163,43 @@ agreements, so tell participants you use an AI assistant (e.g. "I use an AI note
 * Busy rooms, distant speakers or people talking over each other lower accuracy.
 * For video calls (Zoom/Meet on a laptop), the phone must be able to hear the laptop's speaker.
 
+## Dictation: "What should I type?"
+
+| Say | EDITH |
+|---|---|
+| "Open Notes and type" / "Take a note" | *"What should I write, sir?"* → beep → you speak (pauses are fine; stop for ~3 s when done) → creates the note in Google Keep / your notes app |
+| "Take a note: call the plumber tomorrow" | Creates it straight away |
+| "WhatsApp Rahul" / "Send a message to Mom" | *"What should I say to Rahul?"* → you speak → reads it back → **yes** sends (full edition) or opens it typed (normal edition) |
+| "Open Instagram and type" | *"What should I type on Instagram?"* → full edition: opens Instagram, waits for you to open the chat, types it, asks *"Should I send it?"*. Normal edition: opens Instagram's share screen with your text |
+| "Type" / "Type I'll call you back" (in any app) | Full edition: types into the open app's text box and offers to press Send. Normal edition: copies it so you can paste |
+
+Typing into other apps and pressing Send needs the **full edition** (installed from a PC) with
+**Allow typing & Send in apps** switched on. That access works in any app with a text box, never
+types into password fields, and only acts right after you dictate.
+
+## Personality & voice
+
+EDITH is friendly and a little cheeky, calls you **sir** (change it in *EDITH's voice & hearing*), jokes
+when it fits (never in Meeting mode or serious moments), and greets you when your headphones
+connect: *"Welcome back, sir. Missed me?"*. Say *"Edith, hello, I'm back"* and it responds like it.
+
+**Human-like voice:** with `AI_PROVIDER=groq`, EDITH speaks with Groq's expressive Orpheus voice
+(choose Hannah, Diana, Autumn, Daniel, Austin or Troy, then **▶ Test voice**). It's about a second
+slower than the phone voice and uses Groq quota. If the server can't produce it, EDITH automatically
+uses the phone voice. If *Test voice* reports an error from Groq, open <https://console.groq.com>,
+try the Orpheus model in the Playground once (some models ask you to accept terms), then test again.
+
+## Hearing you properly
+
+* EDITH now uses Groq's most accurate speech model (`whisper-large-v3`), Android's noise suppression
+  and automatic volume boost, and waits longer before deciding you've finished speaking.
+* Add names and unusual words in **Words EDITH should recognise** (your name from *About me* is
+  added automatically).
+* **🎧 Hearing test:** start EDITH, tap it, speak for 5 seconds. You'll see and hear exactly what
+  EDITH understood and how loud your voice arrives.
+* Bluetooth earbud mics send call-quality audio. If the test shows mistakes or "quiet", choose **Phone
+  microphone** in section 3.
+
 ## My headphones: EDITH only works with yours
 
 At the top of the app, **My headphones**:

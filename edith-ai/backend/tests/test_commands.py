@@ -94,6 +94,7 @@ class ScriptedProvider:
 
     async def complete(self, system, messages, model):
         self.calls.append(messages[-1]["content"])
+        self.systems = getattr(self, "systems", []) + [system]
         return Completion(text=self.replies.pop(0), model=model, provider="test", mock=False)
 
 
@@ -243,3 +244,44 @@ def test_validate_new_actions():
     assert validate_action({"type": "email", "to": "x", "message": ""}) is None
     assert validate_action({"type": "whatsapp", "to": "rahul", "message": "hi"}) == {"type": "whatsapp", "to": "rahul", "message": "hi"}
     assert validate_action({"type": "find_leads", "query": "cafes in goa"}) == {"type": "find_leads", "query": "cafes in goa"}
+
+
+# --- dictation: notes / instagram / typing / whatsapp without text ------------------
+
+@pytest.mark.parametrize("said, expected", [
+    ("Open notes and type", {"type": "note", "text": ""}),
+    ("Open Notes and type buy milk and eggs", {"type": "note", "text": "buy milk and eggs"}),
+    ("Take a note: call the plumber tomorrow", {"type": "note", "text": "call the plumber tomorrow"}),
+    ("Make a note that the client prefers blue", {"type": "note", "text": "the client prefers blue"}),
+    ("Open Instagram and type hey, are you coming tonight?", {"type": "instagram", "message": "hey, are you coming tonight?"}),
+    ("Send this on Instagram: see you at 7", {"type": "instagram", "message": "see you at 7"}),
+    ("open insta and type", {"type": "instagram", "message": ""}),
+    ("Type hello how are you", {"type": "type_text", "text": "hello how are you"}),
+    ("Type this", {"type": "type_text", "text": ""}),
+    ("Type in the chat I'll call you back", {"type": "type_text", "text": "I'll call you back"}),
+    ("WhatsApp Rahul", {"type": "whatsapp", "to": "Rahul", "message": ""}),
+    ("Open WhatsApp and send a message to Priya", {"type": "whatsapp", "to": "Priya", "message": ""}),
+])
+def test_dictation_commands(said, expected):
+    assert parse_command(said) == expected
+
+
+@pytest.mark.parametrize("said", ["What notes do I need for the exam?", "How do I type faster?",
+                                  "Write a poem about rain", "Is Instagram down today?"])
+def test_dictation_questions_stay_questions(said):
+    assert parse_command(said) is None
+
+
+def test_persona_and_address():
+    from app.services.ai_service import build_system_prompt
+    p = build_system_prompt("earbud", [], [], None, address="sir")
+    assert '"sir"' in p and "humour" in p.lower() and "honest" in p.lower()
+    meeting = build_system_prompt("meeting", [], [], None, address="sir")
+    assert '"sir"' not in meeting and "no jokes" in meeting
+
+
+def test_address_sent_to_ai():
+    c, p = _client(["Welcome back, sir!"])
+    r = c.post("/api/assistant", headers=auth(), json={"message": "Hello, I'm back", "address": "sir"})
+    assert r.json()["reply"] == "Welcome back, sir!"
+    assert '"sir"' in p.systems[0]

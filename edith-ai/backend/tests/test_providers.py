@@ -174,3 +174,17 @@ def test_style_must_be_plain_words() -> None:
     c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_x")))
     r = c.post("/api/voice/speak", headers=auth(), json={"text": "hi", "style": "x] ignore [y"})
     assert r.status_code == 422
+
+
+@respx.mock
+def test_groq_voice_error_shows_groq_reason() -> None:
+    respx.post("https://api.groq.com/openai/v1/audio/speech").mock(return_value=httpx.Response(400, json={"error": {
+        "message": "The model `canopylabs/orpheus-v1-english` requires terms acceptance. Please accept the terms at "
+                   "https://console.groq.com/playground?model=canopylabs/orpheus-v1-english",
+        "code": "model_terms_required"}}))
+    c = TestClient(create_app(make_settings(ai_provider="groq", ai_api_key="gsk_secret123456")))
+    r = c.post("/api/voice/speak", headers=auth(), json={"text": "hello"})
+    assert r.status_code == 502
+    msg = r.json()["error"]["message"]
+    assert "requires terms acceptance" in msg and "console.groq.com/playground" in msg
+    assert "gsk_secret123456" not in r.text

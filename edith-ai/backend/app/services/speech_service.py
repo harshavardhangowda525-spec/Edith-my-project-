@@ -74,6 +74,22 @@ def join_wavs(parts: list[bytes]) -> bytes:
     return out.getvalue()
 
 
+def _speech_error(r: httpx.Response, path: str) -> ProviderError:
+    """Pass on the provider's own reason (e.g. model access/terms, quota), never keys or audio."""
+    try:
+        body = r.json()
+        err = body.get("error") if isinstance(body, dict) else None
+        msg = (err.get("message") if isinstance(err, dict) else err) or ""
+    except ValueError:
+        msg = ""
+    msg = re.sub(r"(?i)\b(?:gsk|sk)[-_][-_A-Za-z0-9]{2,}", "[hidden]", str(msg))[:300]
+    what = "voice" if path.endswith("/speech") else "speech-to-text"
+    hint = {401: "the API key was rejected", 403: "access to this model is not allowed for your account",
+            404: "the model was not found", 429: "rate limit or quota reached"}.get(r.status_code, f"HTTP {r.status_code}")
+    return ProviderError(f"The {what} service refused the request ({hint})." + (f" Groq says: {msg}" if msg else ""),
+                         code="speech_provider_error")
+
+
 class OpenAISpeechProvider:
     name = "openai"
 
@@ -94,7 +110,7 @@ class OpenAISpeechProvider:
         except httpx.HTTPError as exc:
             raise ProviderError("Could not reach the speech provider") from exc
         if r.status_code >= 400:
-            raise ProviderError(f"Speech provider returned HTTP {r.status_code}")
+            raise _speech_error(r, path)
         return r
 
     async def transcribe(self, audio: bytes, filename: str, content_type: str,

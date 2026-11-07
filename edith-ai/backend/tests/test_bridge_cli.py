@@ -55,3 +55,95 @@ def test_unknown_job_and_missing_test_command_are_refused():
     assert bridge.handle(cfg, {"kind": "rm_rf", "params": {}}, yes=True)[0] is False
     ok, msg = bridge.handle(cfg, {"kind": "run_tests", "params": {}}, yes=True)
     assert not ok and "No test command" in msg
+
+
+# ---------------------------------------------------------------- laptop jobs
+import os
+import subprocess
+import sys
+import textwrap
+
+
+def _repo(tmp_path):
+    repo = tmp_path / "shop"
+    repo.mkdir()
+    (repo / "app.py").write_text("print('hi')\n")
+    (repo / "test_app.py").write_text("def test_ok():\n    assert True\n")
+    for cmd in (["init", "-q", "-b", "main"], ["add", "-A"],
+                ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+        subprocess.run(["git", *cmd], cwd=repo, check=True)
+    return repo
+
+
+def _fake_claude(tmp_path, monkeypatch, body):
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "claude"
+    exe.write_text(f"#!{sys.executable}\n" + textwrap.dedent(body))
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    return exe
+
+
+def _cfg(repo, test=True):
+    return {"server": "http://x", "token": "t", "projects": {"shop": {
+        "path": str(repo), "test": f"{sys.executable} -m pytest -q -p no:cacheprovider" if test else None,
+        "commands": {"dev": "echo dev-server-running", "deploy": "echo deploy"}, "open": []}}}
+
+
+def test_agent_writes_code_on_a_new_branch_and_runs_tests(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _fake_claude(tmp_path, monkeypatch, """
+        import json, sys
+        prompt = sys.stdin.read()
+        assert "Do not push" in prompt and "add a greeting" in prompt
+        args = sys.argv[1:]
+        assert "Bash(git push:*)" in args[args.index("--disallowedTools"):]
+        assert "Bash(echo deploy:*)" not in args  # deploy-like commands are never allowed
+        open("greet.py", "w").write("def greet():\\n    return 'hello'\\n")
+        print(json.dumps({"result": "Added greet() in greet.py.", "is_error": False}))
+    """)
+    monkeypatch.setattr(bridge, "call", lambda *a, **k: (200, {"cancelled": False}))
+    ok, report = bridge.handle(_cfg(repo), {"id": "j1", "kind": "agent",
+                                            "params": {"project": "shop", "task": "add a greeting"}}, yes=True)
+    assert ok, report
+    assert "Added greet()" in report and "Tests passed." in report and "not pushed" in report
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, capture_output=True,
+                            text=True).stdout.strip()
+    assert branch.startswith("edith/add-a-greeting")
+    main_files = subprocess.run(["git", "ls-tree", "--name-only", "main"], cwd=repo, capture_output=True,
+                                text=True).stdout.split()
+    assert "greet.py" not in main_files  # main is untouched
+
+
+def test_agent_refuses_uncommitted_changes_and_missing_claude(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    monkeypatch.setattr(bridge.shutil, "which", lambda name: None)
+    ok, msg = bridge.handle(_cfg(repo), {"id": "j", "kind": "agent", "params": {"task": "do something"}}, yes=True)
+    assert not ok and "isn't installed" in msg
+    monkeypatch.undo()
+    _fake_claude(tmp_path, monkeypatch, "print('{}')\n")
+    (repo / "app.py").write_text("changed\n")
+    ok, msg = bridge.handle(_cfg(repo), {"id": "j", "kind": "agent", "params": {"task": "do something"}}, yes=True)
+    assert not ok and "uncommitted changes" in msg
+
+
+def test_agent_stops_when_task_is_cancelled(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    _fake_claude(tmp_path, monkeypatch, "import time, sys\nsys.stdin.read()\ntime.sleep(60)\n")
+    monkeypatch.setattr(bridge, "call", lambda *a, **k: (200, {"cancelled": True}))
+    ok, msg = bridge.handle(_cfg(repo), {"id": "j", "kind": "agent", "params": {"task": "slow work"}}, yes=True)
+    assert not ok and "cancelled" in msg
+
+
+def test_run_named_command_and_unknown_command(tmp_path):
+    repo = _repo(tmp_path)
+    ok, out = bridge.handle(_cfg(repo), {"kind": "run_command", "params": {"command": "dev server"}}, yes=True)
+    assert ok and "dev-server-running" in out
+    ok, out = bridge.handle(_cfg(repo), {"kind": "run_command", "params": {"command": "rm everything"}}, yes=True)
+    assert not ok and "no command called" in out
+
+
+def test_wake_info_finds_a_mac():
+    macs = bridge.mac_addresses()
+    assert all(len(m) == 17 for m in macs)

@@ -212,7 +212,7 @@ class TaskEngine:
                 self._finish(t, "cancelled", message="Cancelled")
                 return
             except asyncio.TimeoutError:
-                self._finish(t, "failed", error=f"Timed out after {int(t.timeout_s)} s")
+                self._finish(t, "failed", error=f"Timed out after {int(time.perf_counter() - started)} s")
                 return
             except (ProviderError, ProviderTimeout) as exc:
                 if t.attempts >= t.max_attempts or getattr(exc, "code", "") == "provider_auth":

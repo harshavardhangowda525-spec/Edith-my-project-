@@ -705,6 +705,19 @@ class EdithService : Service() {
         }
     }
 
+    /** Sends the Wake-on-LAN packet. Returns what to tell the user (honest about what can't work). */
+    private fun wakeLaptop(prefs: Prefs): String {
+        val learned = runCatching { EdithApi(prefs.serverUrl, prefs.password).laptopMacs() }.getOrDefault(emptyList())
+        if (learned.isNotEmpty()) prefs.laptopMacs = learned
+        val macs = prefs.laptopMacs
+        if (macs.isEmpty()) {
+            return "I don't know your laptop yet. Run the EDITH bridge on it once, so I can learn how to wake it."
+        }
+        val sent = runCatching { WakeOnLan.send(this, macs) }.getOrDefault(false)
+        EdithState.log(if (sent) "Sent wake-up to laptop (${macs.size} adapter(s))" else "Laptop wake-up: phone not on Wi-Fi")
+        return if (sent) "Waking up your laptop." else "I can only wake your laptop when the phone is on your home Wi-Fi."
+    }
+
     private var taskWatch: java.util.concurrent.ScheduledExecutorService? = null
 
     /**
@@ -942,7 +955,13 @@ class EdithService : Service() {
             speaker.finish(wait = false)
             reply
         }
-        startedTask?.let { watchTask(it.optString("id"), it.optString("title")) }
+        startedTask?.let {
+            if (it.optBoolean("wake_pc")) {
+                val msg = wakeLaptop(prefs)
+                if (!msg.startsWith("Waking")) speak(msg) // can't wake: say why; otherwise the reply already said it
+            }
+            watchTask(it.optString("id"), it.optString("title"))
+        }
         synchronized(history) {
             history.addLast(EdithApi.Turn("user", transcript))
             history.addLast(EdithApi.Turn("assistant", spoken))
@@ -964,6 +983,11 @@ class EdithService : Service() {
 
     /** Runs a phone action (call, open app, music, ...). Returns what EDITH said, for the history. */
     private fun performAction(action: org.json.JSONObject, say: String, prefs: Prefs): String {
+        if (action.optString("type") == "wake_pc") {
+            val result = wakeLaptop(prefs)
+            speak(result)
+            return result
+        }
         val actions = PhoneActions(this, prefs, EdithApi(prefs.serverUrl, prefs.password))
         return runPlan(actions.plan(action, say), actions, action.optString("type"), say, prefs)
     }

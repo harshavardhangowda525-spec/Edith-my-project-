@@ -246,6 +246,13 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         val finished get() = status == "completed" || status == "failed" || status == "cancelled"
     }
 
+    /** MAC addresses the PC bridge reported (empty when the bridge never ran). */
+    fun laptopMacs(): List<String> {
+        val s = JSONObject(request("GET", "/api/bridge/status"))
+        val arr = s.optJSONArray("macs") ?: return emptyList()
+        return (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+    }
+
     fun task(id: String): TaskInfo {
         val t = JSONObject(request("GET", "/api/tasks/$id"))
         fun str(key: String) = if (t.isNull(key)) null else t.optString(key).ifBlank { null }

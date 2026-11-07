@@ -51,6 +51,20 @@ async def assistant_events(body: ChatRequest, user_id: str, ai: AIService, memor
 
     message = body.message
     directed = True
+
+    # Answer to "Should I start Claude Code on ...?" (asked a moment ago).
+    verdict, confirmed = server_commands.take_confirmation(user_id, message)
+    if verdict != "none":
+        yield {"type": "meta", "route": "local", "model": "local"}
+        if confirmed:
+            say, task = await server_commands.run(confirmed, user_id, memory, tasks, body.address)
+            if task:
+                yield {"type": "task", "task": task}
+            yield {"type": "token", "t": say}
+        else:
+            yield {"type": "token", "t": "Okay, I won't start it."}
+        yield done(route="local")
+        return
     if body.followup:
         quick = command_service.followup_kind(message)
         if quick == "end":

@@ -2,19 +2,29 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, Response, status
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
 
 from app.dependencies import current_user, get_bridge
 from app.security.authentication import AuthenticatedUser
 from app.services.bridge import JOB_KINDS, BridgeHub
 
 router = APIRouter(prefix="/api/bridge", tags=["bridge"])
+_MAC = re.compile(r"^[0-9A-Fa-f]{2}([-:][0-9A-Fa-f]{2}){5}$")
 
 
 class Heartbeat(BaseModel):
     hostname: str = Field(default="pc", max_length=100)
     projects: list[str] = Field(default_factory=list, max_length=50)
     version: str = Field(default="1", max_length=20)
+    # Network adapter addresses, so the phone can send the wake-up signal without you typing them.
+    macs: list[str] = Field(default_factory=list, max_length=10)
+
+    @field_validator("macs")
+    @classmethod
+    def _macs(cls, v: list[str]) -> list[str]:
+        return [m.upper().replace("-", ":") for m in v if _MAC.match(m.strip())]
 
 
 class JobResult(BaseModel):
@@ -44,6 +54,13 @@ async def next_job(response: Response, wait: float = 20.0, user: AuthenticatedUs
         response.status_code = status.HTTP_204_NO_CONTENT
         return None
     return {"id": job.id, "kind": job.kind, "params": job.params}
+
+
+@router.get("/jobs/{job_id}")
+def job_state(job_id: str, user: AuthenticatedUser = Depends(current_user),
+              hub: BridgeHub = Depends(get_bridge)) -> dict[str, Any]:
+    """The bridge checks this while a long job runs, and stops when you cancelled the task."""
+    return {"cancelled": hub.is_cancelled(user.id, job_id)}
 
 
 @router.post("/jobs/{job_id}/result")

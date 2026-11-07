@@ -191,6 +191,8 @@ def parse_command(text: str) -> dict[str, Any] | None:
     leads = parse_leads(t)
     if leads:
         return leads
+    if _WAKE_PC.match(t):
+        return {"type": "wake_pc"}
 
     # --- music: "open spotify and play my favourite music", "play arijit singh on spotify"
     m = re.match(r"^(?:open|launch|start|go to)\s+(?:the\s+)?(.+?)(?:\s+app)?\s+and\s+(?:then\s+)?(?:play|put on)\s*(.*)$", t)
@@ -285,7 +287,9 @@ If it is a request to control the phone, reply with ONLY one JSON object, no oth
 {{"type":"type_text","text":"<text to type into the open app, or empty to ask>"}}
 If it is NOT a phone command (a question, a chat, anything else) reply with exactly: {{"type":"none"}}"""
 
-_ALLOWED_TYPES = {"call", "open_app", "play_music", "media", "alarm", "timer", "navigate",
+_WAKE_PC = re.compile(r"^(?:please\s+)?(?:turn on|switch on|wake(?: up)?|start(?: up)?|boot(?: up)?|power on)\s+"
+                      r"(?:my\s+|the\s+)?(?:laptop|pc|computer|desktop)(?:\s+(?:up|please|now))*$")
+_ALLOWED_TYPES = {"wake_pc", "call", "open_app", "play_music", "media", "alarm", "timer", "navigate",
                   "find_leads", "email", "whatsapp", "note", "instagram", "type_text"}
 
 
@@ -343,6 +347,8 @@ def validate_action(a: Any) -> dict[str, Any] | None:
         return {"type": t, "seconds": secs} if 0 < secs <= 24 * 3600 else None
     if t == "navigate":
         return {"type": t, "destination": s("destination", 200)} if s("destination") else None
+    if t == "wake_pc":
+        return {"type": t}
     return None
 
 
@@ -406,6 +412,8 @@ def describe(action: dict[str, Any]) -> str:
         return "Noted." if action.get("text") else "What should I write?"
     if t == "type_text":
         return "Typing it." if action.get("text") else "What should I type?"
+    if t == "wake_pc":
+        return "Waking up your laptop."
     if t == "instagram":
         return "Instagram message." if action.get("message") else "What should I type on Instagram?"
     return "Okay."

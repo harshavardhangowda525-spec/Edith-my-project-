@@ -173,7 +173,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.tasks = TaskEngine(store, workers=settings.task_workers)
     register_handlers(app.state.tasks, ai=app.state.ai, memory=app.state.memory, store=store,
                       github=app.state.github, bridge=app.state.bridge,
-                      bridge_timeout_s=settings.bridge_job_timeout_s)
+                      bridge_timeout_s=settings.bridge_job_timeout_s, wake_wait_s=settings.bridge_wake_wait_s)
 
     if settings.ai_provider_problem:
         log.error("AI provider misconfigured: %s", settings.ai_provider_problem)

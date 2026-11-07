@@ -145,6 +145,7 @@ class Settings(BaseSettings):
     # --- Background tasks & PC bridge ---------------------------------------------
     task_workers: int = 3
     bridge_job_timeout_s: float = 900.0
+    bridge_wake_wait_s: float = 240.0   # how long to wait for a sleeping laptop to wake up and reconnect
 
     # --- Logging: "text" (default) or "json" (one JSON object per line) -----------
     log_format: Literal["text", "json"] = "text"

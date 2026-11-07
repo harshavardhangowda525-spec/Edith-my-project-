@@ -15,6 +15,11 @@ class Prefs(context: Context) {
         set(v) = p.edit().putString("password", v.trim()).apply()
 
     /** true: wake only when "Edith" / "Hey Edith" is said on its own (fewer false wake-ups). */
+    /** The laptop's network adapter addresses, learned from the EDITH PC bridge (for Wake-on-LAN). */
+    var laptopMacs: List<String>
+        get() = (p.getString("laptop_macs", "") ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        set(v) = p.edit().putString("laptop_macs", v.joinToString(",")).apply()
+
     var strictWake: Boolean
         get() = p.getBoolean("strict_wake", true)
         set(v) = p.edit().putBoolean("strict_wake", v).apply()

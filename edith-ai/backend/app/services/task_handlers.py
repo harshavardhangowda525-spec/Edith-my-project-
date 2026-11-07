@@ -6,7 +6,7 @@ from typing import Any
 
 from app.errors import AppError, NotFoundError, ValidationFailed
 from app.services.ai_service import AIService
-from app.services.bridge import BridgeHub
+from app.services.bridge import JOB_TIMEOUTS, BridgeHub
 from app.services.github_service import GitHubService
 from app.services.memory_service import MemoryService
 from app.services.tasks import TaskContext, TaskEngine
@@ -20,7 +20,8 @@ TASK_TYPES = {
 
 
 def register_handlers(engine: TaskEngine, *, ai: AIService, memory: MemoryService, store: Any,
-                      github: GitHubService, bridge: BridgeHub, bridge_timeout_s: float) -> None:
+                      github: GitHubService, bridge: BridgeHub, bridge_timeout_s: float,
+                      wake_wait_s: float = 240.0) -> None:
 
     async def research(ctx: TaskContext) -> str:
         q = str(ctx.task.params.get("question", "")).strip()
@@ -52,13 +53,18 @@ def register_handlers(engine: TaskEngine, *, ai: AIService, memory: MemoryServic
 
     async def pc(ctx: TaskContext) -> str:
         kind = str(ctx.task.params.get("kind", ""))
-        await ctx.progress(10, "Waiting for your PC to accept the job")
-        ok, output = await bridge.run(ctx.user_id, kind, dict(ctx.task.params.get("args") or {}), bridge_timeout_s)
+        if not bridge.online(ctx.user_id):
+            await ctx.progress(5, "Waiting for your laptop to wake up")
+        await ctx.progress(10, "Working on your laptop" if kind == "agent" else "Sent to your laptop")
+        ok, output = await bridge.run(ctx.user_id, kind, dict(ctx.task.params.get("args") or {}),
+                                      max(bridge_timeout_s, JOB_TIMEOUTS.get(kind, 0)), wake_wait_s=wake_wait_s,
+                                      checkpoint=ctx.checkpoint)
         if not ok:
             raise AppError(output[:2000] or "The PC job failed", code="pc_job_failed")
         return output
 
+    engine.bridge = bridge  # type: ignore[attr-defined]  # lets spoken commands know if the laptop is online
     engine.register("research", research, timeout_s=180)
     engine.register("summarize_document", summarize_document, timeout_s=180)
     engine.register("github_summary", github_summary, timeout_s=60)
-    engine.register("pc", pc, timeout_s=bridge_timeout_s + 30)
+    engine.register("pc", pc, timeout_s=max(JOB_TIMEOUTS.values()) + wake_wait_s + 60)

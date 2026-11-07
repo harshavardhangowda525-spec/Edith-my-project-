@@ -30,6 +30,7 @@ def make_settings(**overrides) -> Settings:
         rate_limit_per_minute=1000,
         github_token=None,  # the developer's shell may export one; tests must not use it
         github_default_repo=None,
+        bridge_wake_wait_s=0,  # no waiting for a laptop to wake up in tests
     )
     base.update(overrides)
     return Settings(**base)

@@ -301,3 +301,85 @@ def test_unfinished_tasks_are_recovered_after_restart():
         assert t.result == "recovered"
         await eng.shutdown()
     run(main())
+
+
+# ---------------------------------------------------------------- laptop: wake, confirm, Claude Code, cancel
+def _events(r):
+    return [json.loads(l[5:]) for l in r.text.splitlines() if l.startswith("data:")]
+
+
+def _say(evs):
+    return "".join(e.get("t", "") for e in evs if e["type"] == "token")
+
+
+def test_plain_turn_on_laptop_is_a_phone_action():
+    with TestClient(create_app(make_settings())) as c:
+        r = c.post("/api/assistant", headers=auth(), json={"message": "turn on my laptop"})
+        assert r.json()["kind"] == "action" and r.json()["action"] == {"type": "wake_pc"}
+
+
+def test_coding_on_laptop_needs_a_spoken_yes_then_wakes_and_runs():
+    with TestClient(create_app(make_settings())) as c:
+        evs = _events(c.post("/api/assistant/stream", headers=auth(), json={
+            "message": "Turn on my laptop and work on shop and build the login page", "address": "sir"}))
+        assert "Should I start Claude Code on shop to build the login page" in _say(evs)
+        assert not any(e["type"] == "task" for e in evs)  # nothing starts without a yes
+        assert c.get("/api/tasks", headers=auth()).json() == []
+        # "yes" said without "Edith" in conversation mode still counts as the answer
+        evs = _events(c.post("/api/assistant/stream", headers=auth(), json={"message": "yes", "followup": True}))
+        task = next(e for e in evs if e["type"] == "task")["task"]
+        assert task["params"] == {"kind": "agent", "args": {"project": "shop", "task": "build the login page"}}
+        assert task["wake_pc"] is True and "Waking your laptop" in _say(evs)
+        # the laptop never came online in time -> honest failure, not "done"
+        for _ in range(100):
+            t = c.get(f"/api/tasks/{task['id']}", headers=auth()).json()
+            if t["status"] in ("failed", "completed"):
+                break
+            time.sleep(0.02)
+        assert t["status"] == "failed" and "laptop isn't connected" in t["error"]
+
+
+def test_no_cancels_and_other_speech_drops_the_question():
+    with TestClient(create_app(make_settings())) as c:
+        c.post("/api/assistant", headers=auth(), json={"message": "work on shop and add dark mode"})
+        assert "won't start" in c.post("/api/assistant", headers=auth(), json={"message": "no"}).json()["reply"]
+        c.post("/api/assistant", headers=auth(), json={"message": "work on shop and add dark mode"})
+        c.post("/api/assistant", headers=auth(), json={"message": "what's the capital of France"})
+        r = c.post("/api/assistant", headers=auth(), json={"message": "yes"})
+        assert r.json().get("task") is None
+        assert c.get("/api/tasks", headers=auth()).json() == []
+
+
+def test_confirmation_belongs_to_one_user():
+    with TestClient(create_app(make_settings())) as c:
+        c.post("/api/assistant", headers=auth(), json={"message": "work on shop and add dark mode"})
+        r = c.post("/api/assistant", headers=auth(BOB), json={"message": "yes"})
+        assert r.json().get("task") is None
+
+
+def test_laptop_job_round_trip_cancel_and_macs():
+    app = create_app(make_settings())
+    with TestClient(app) as c:
+        c.post("/api/bridge/heartbeat", headers=auth(),
+               json={"hostname": "laptop", "macs": ["aa-bb-cc-dd-ee-ff", "junk"]})
+        assert c.get("/api/bridge/status", headers=auth()).json()["macs"] == ["AA:BB:CC:DD:EE:FF"]
+        evs = _events(c.post("/api/assistant/stream", headers=auth(), json={"message": "open project shop"}))
+        task = next(e for e in evs if e["type"] == "task")["task"]
+        assert task["wake_pc"] is False  # laptop already online
+        job = c.get("/api/bridge/jobs/next?wait=3", headers=auth()).json()
+        assert job["kind"] == "open_project" and job["params"] == {"project": "shop"}
+        c.post(f"/api/bridge/jobs/{job['id']}/result", headers=auth(), json={"ok": True, "output": "Opened shop"})
+        # a long coding job is cancelled by voice -> the bridge is told to stop
+        c.post("/api/assistant", headers=auth(), json={"message": "work on shop and add dark mode"})
+        tid = c.post("/api/assistant", headers=auth(), json={"message": "yes go ahead"}).json()["task"]["id"]
+        job = c.get("/api/bridge/jobs/next?wait=3", headers=auth()).json()
+        assert job["kind"] == "agent"
+        assert c.get(f"/api/bridge/jobs/{job['id']}", headers=auth()).json() == {"cancelled": False}
+        assert "Cancelled" in c.post("/api/assistant", headers=auth(), json={"message": "stop the laptop task"}).json()["reply"]
+        for _ in range(200):
+            if c.get(f"/api/bridge/jobs/{job['id']}", headers=auth()).json()["cancelled"]:
+                break
+            time.sleep(0.02)
+        assert c.get(f"/api/bridge/jobs/{job['id']}", headers=auth()).json() == {"cancelled": True}
+        assert c.get(f"/api/bridge/jobs/{job['id']}", headers=auth(BOB)).json() == {"cancelled": False}
+        assert c.get(f"/api/tasks/{tid}", headers=auth()).json()["status"] == "cancelled"

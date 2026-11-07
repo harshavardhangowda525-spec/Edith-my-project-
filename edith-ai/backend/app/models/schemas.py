@@ -27,6 +27,11 @@ class ChatRequest(BaseModel):
     followup: bool = False
     # How EDITH addresses the user, e.g. "sir", "boss" or their name.
     address: str | None = Field(default=None, max_length=30)
+    # Model routing override: auto (default) | fast | balanced | deep.
+    route: Literal["auto", "fast", "balanced", "deep"] | None = None
+    # Device context from the phone: local time (ISO 8601 with offset) and battery percent.
+    client_time: str | None = Field(default=None, max_length=40)
+    battery: int | None = Field(default=None, ge=0, le=100)
 
     @field_validator("message")
     @classmethod

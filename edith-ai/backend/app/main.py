@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import logging
 import re
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -22,6 +24,8 @@ from app.errors import AppError
 from app.security.authentication import personal_mode_problem
 from app.security.rate_limit import RateLimiter
 from app.services.ai_service import AIService
+from app.services.http import close_shared
+from app.services.metrics import Metrics
 from app.services.email_service import EmailService
 from app.services.leads_service import LeadsService
 from app.services.memory_service import MemoryService
@@ -122,14 +126,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         h.addFilter(RedactSecretsFilter())
 
     is_prod = settings.environment == "production"
-    app = FastAPI(title="EDITH AI", version="1.0.0",
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        await close_shared()  # close pooled provider connections on shutdown
+
+    app = FastAPI(title="EDITH AI", version="1.1.0", lifespan=lifespan,
                   docs_url=None if is_prod else "/docs", redoc_url=None,
                   openapi_url=None if is_prod else "/openapi.json")
 
     store = build_store(settings)
     app.state.settings = settings
     app.state.store = store
-    app.state.ai = AIService(settings)
+    app.state.metrics = Metrics()
+    app.state.ai = AIService(settings, metrics=app.state.metrics)
     app.state.speech = SpeechService(settings)
     app.state.memory = MemoryService(store)
     app.state.retrieval = RetrievalService(store)
@@ -160,7 +170,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):  # type: ignore[no-untyped-def]
+        t0 = time.perf_counter()
         response = await call_next(request)
+        # Time to response headers (for streams: until the first event is ready).
+        route = request.scope.get("route")
+        app.state.metrics.observe(f"http_ms.{getattr(route, 'path', 'other')}", (time.perf_counter() - t0) * 1000)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")

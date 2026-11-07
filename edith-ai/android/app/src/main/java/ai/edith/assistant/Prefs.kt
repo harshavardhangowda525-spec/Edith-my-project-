@@ -114,6 +114,11 @@ class Prefs(context: Context) {
         return listOfNotNull("EDITH", name, extraWords.takeIf { it.isNotBlank() }).joinToString(", ")
     }
 
+    /** Seconds of silence that end a question: 0.9 quick, 1.3 normal, 1.8 relaxed. */
+    var endPause: Float
+        get() = p.getFloat("end_pause", 1.3f)
+        set(v) = p.edit().putFloat("end_pause", v.coerceIn(0.7f, 2.5f)).apply()
+
     /** What is missing before EDITH can listen, or null when ready. */
     fun missing(): String? = when {
         serverUrl.isBlank() -> "Enter your EDITH server address."

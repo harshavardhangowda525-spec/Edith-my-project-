@@ -143,6 +143,102 @@ class EdithApi(private val baseUrl: String, private val password: String) {
         }
     }
 
+    /** Device context sent with each question: local time (with zone) and battery percent. */
+    data class Device(val time: String, val battery: Int?)
+
+    /**
+     * One round trip for a spoken question: uploads the audio and reads the streamed answer.
+     * [onEvent] gets each server event (transcript, meta, token, action, ignore, end, done, error)
+     * as it arrives; return false to stop reading (barge-in).
+     */
+    fun voiceAsk(wav: ByteArray, language: String?, hints: String?, history: List<Turn>, followup: Boolean,
+                 address: String?, device: Device?, onEvent: (JSONObject) -> Boolean) {
+        val boundary = "edith" + System.nanoTime()
+        val body = ByteArrayOutputStream().apply {
+            fun line(s: String) = write((s + "\r\n").toByteArray())
+            fun field(name: String, value: String?) {
+                if (value.isNullOrBlank()) return
+                line("--$boundary"); line("Content-Disposition: form-data; name=\"$name\""); line(""); line(value)
+            }
+            field("language", language)
+            field("prompt", hints?.take(700))
+            field("history", JSONArray().apply {
+                history.takeLast(12).forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
+            }.toString())
+            field("followup", followup.toString())
+            field("address", address)
+            field("client_time", device?.time)
+            field("battery", device?.battery?.toString())
+            line("--$boundary")
+            line("Content-Disposition: form-data; name=\"audio\"; filename=\"question.wav\"")
+            line("Content-Type: audio/wav")
+            line("")
+            write(wav)
+            line("")
+            line("--$boundary--")
+        }.toByteArray()
+        stream("/api/voice/ask", body, "multipart/form-data; boundary=$boundary", onEvent)
+    }
+
+    /** Streamed answer for text (used when the phone already has the transcript). */
+    fun assistantStream(message: String, history: List<Turn>, language: String?, followup: Boolean,
+                        address: String?, device: Device?, onEvent: (JSONObject) -> Boolean) {
+        val payload = JSONObject().put("message", message).put("mode", "earbud").put("followup", followup)
+            .put("history", JSONArray().apply {
+                history.takeLast(12).forEach { put(JSONObject().put("role", it.role).put("content", it.content)) }
+            })
+        if (!language.isNullOrBlank()) payload.put("language", language)
+        if (!address.isNullOrBlank()) payload.put("address", address)
+        device?.let { d -> payload.put("client_time", d.time); d.battery?.let { payload.put("battery", it) } }
+        stream("/api/assistant/stream", payload.toString().toByteArray(), "application/json", onEvent)
+    }
+
+    private fun stream(path: String, body: ByteArray, contentType: String, onEvent: (JSONObject) -> Boolean) {
+        val conn = try {
+            URL(baseUrl.trimEnd('/') + path).openConnection() as HttpURLConnection
+        } catch (e: Exception) {
+            throw EdithException("The EDITH server address looks wrong.")
+        }
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 70_000
+            conn.doOutput = true
+            conn.setRequestProperty("Authorization", "Bearer $password")
+            conn.setRequestProperty("Content-Type", contentType)
+            conn.setRequestProperty("Accept", "text/event-stream")
+            conn.setFixedLengthStreamingMode(body.size)
+            conn.outputStream.use { it.write(body) }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                val text = conn.errorStream?.use { String(it.readBytes()) } ?: ""
+                val msg = runCatching { JSONObject(text).getJSONObject("error").getString("message") }
+                    .getOrDefault("Server error (HTTP $code)")
+                throw EdithException(if (code == 401) "Wrong EDITH password." else msg)
+            }
+            conn.inputStream.bufferedReader().use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val ev = runCatching { JSONObject(line.substring(5).trim()) }.getOrNull() ?: continue
+                    if (ev.optString("type") == "error") throw EdithException(ev.optString("message", "Server error"))
+                    if (!onEvent(ev)) {
+                        conn.disconnect() // barge-in: stop the download now
+                        return
+                    }
+                }
+            }
+        } catch (e: EdithException) {
+            throw e
+        } catch (e: UnknownHostException) {
+            throw EdithException("No internet connection, or the server address is wrong.")
+        } catch (e: SocketTimeoutException) {
+            throw EdithException("The EDITH server took too long to answer.")
+        } catch (e: IOException) {
+            throw EdithException("Could not reach the EDITH server.")
+        }
+    }
+
     data class MeetingHelp(val question: String?, val answer: String?)
 
     /** Live meeting help. Returns answer = null when there is nothing worth answering. */
@@ -200,8 +296,8 @@ class EdithApi(private val baseUrl: String, private val password: String) {
             throw EdithException("The EDITH server took too long to answer.")
         } catch (e: IOException) {
             throw EdithException("Could not reach the EDITH server.")
-        } finally {
-            conn.disconnect()
         }
+        // No disconnect(): Android keeps the connection alive and re-uses it for the next request,
+        // which skips a new TLS handshake (often 100-300 ms on mobile networks).
     }
 }

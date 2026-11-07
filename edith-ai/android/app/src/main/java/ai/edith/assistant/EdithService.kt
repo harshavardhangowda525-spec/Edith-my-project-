@@ -54,6 +54,14 @@ object EdithState {
     /** Meeting mode: answer questions heard in the room automatically (user-confirmed consent). */
     @Volatile var meetingMode = false
     @Volatile var lastHeard = ""
+    /** Seconds from "you stopped talking" to "EDITH's voice starts", last 30 answers. */
+    val speedMs = java.util.concurrent.CopyOnWriteArrayList<Int>()
+
+    fun speed(ms: Int) {
+        speedMs.add(ms)
+        while (speedMs.size > 30) speedMs.removeAt(0)
+    }
+
     /** Recent actions and their result (shown in the app; helps find problems). */
     val actionLog = java.util.concurrent.CopyOnWriteArrayList<String>()
 
@@ -148,7 +156,7 @@ class EdithService : Service() {
         routing = AudioRouting(this)
         createChannel()
         tts = TextToSpeech(this) { status ->
-            if (status == TextToSpeech.SUCCESS) tts?.let { PhoneVoice.apply(it, Prefs(this)) }
+            if (status == TextToSpeech.SUCCESS) tts?.let { PhoneVoice.apply(it, Prefs(this)); installTtsListener(it) }
             ttsReady.countDown()
         }
     }
@@ -171,12 +179,14 @@ class EdithService : Service() {
             acquireWakeLock()
             setupMediaButton()
             worker = Thread({ listenLoop() }, "edith-listener").also { it.start() }
+            startKeepWarm()
         }
         return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         running.set(false)
+        keepWarm?.shutdownNow()
         meetingWorker.shutdownNow()
         synchronized(transcript) { transcript.clear() }
         EdithState.meetingMode = false
@@ -308,7 +318,7 @@ class EdithService : Service() {
                     val speech = level > threshold
                     if (!speech) noise = noise * 0.98 + level * 0.02
                     // Ignore the room while EDITH itself is whispering an answer.
-                    val segment = if (speaking) null else seg.add(buf, speech)
+                    val segment = if (busySpeaking()) null else seg.add(buf, speech)
                     if (segment != null) submitMeetingSegment(segment, prefs)
                     var trigger = askNow.getAndSet(false)
                     if (recognizer.acceptWaveForm(buf, buf.size)) {
@@ -323,7 +333,7 @@ class EdithService : Service() {
 
                 // 1b) Dictation ("What should I type?") and the hearing test record directly.
                 val dictation = pendingDictation
-                if (!meeting && dictation != null && !speaking && conversationPending.get() == 0) {
+                if (!meeting && dictation != null && !busySpeaking() && conversationPending.get() == 0) {
                     pendingDictation = null
                     current.flush()
                     beep()
@@ -352,10 +362,23 @@ class EdithService : Service() {
                     val threshold = maxOf(noise * 3.0, 500.0)
                     val speech = level > threshold
                     if (!speech) noise = noise * 0.98 + level * 0.02
-                    val busy = speaking || conversationPending.get() > 0
+                    val busy = busySpeaking() || conversationPending.get() > 0
+                    if (busy && bargeIn(recognizer, buf, level, noise)) {
+                        seg.reset()
+                        continue
+                    }
                     val segment = if (busy) null else seg.add(buf, speech)
                     if (segment != null) submitConversationSegment(segment, prefs)
-                    askNow.set(false)
+                    if (askNow.getAndSet(false)) {
+                        // "Edith" barge-in during conversation: record the new question right away.
+                        while (conversationPending.get() > 0 && running.get()) Thread.sleep(20)
+                        handleQuestion(current, FRAME, SAMPLE_RATE, noise, prefs)
+                        current.flush()
+                        recognizer.reset()
+                        seg.reset()
+                        conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+                        continue
+                    }
                     val timedOut = !busy && !seg.inSpeech && System.currentTimeMillis() > conversationUntil
                     if (conversationEnd.get() || timedOut) {
                         conversationUntil = 0
@@ -368,7 +391,13 @@ class EdithService : Service() {
                     continue
                 }
 
-                // 2) Wake word: a finished phrase, or "Edith" followed by a short pause.
+                // 2) While EDITH talks, only listen for "Edith" / "stop" (barge-in).
+                if ((busySpeaking() || conversationPending.get() > 0) && !askNow.get()) {
+                    bargeIn(recognizer, buf, level, noise)
+                    continue
+                }
+
+                // 2b) Wake word: a finished phrase, or "Edith" followed by a short pause.
                 val manual = askNow.getAndSet(false)
                 var detected = false
                 if (recognizer.acceptWaveForm(buf, buf.size)) {
@@ -385,6 +414,12 @@ class EdithService : Service() {
                     continue
                 }
                 partialHits = 0
+                if (busySpeaking() || conversationPending.get() > 0) {
+                    // Barge-in: "Edith" while EDITH is talking stops her and takes the new question.
+                    cancelAnswer.set(true)
+                    stopSpeakingNow()
+                    EdithState.log("Barge-in: stopped talking")
+                }
 
                 // 3) Question -> answer. The microphone keeps running throughout.
                 handleQuestion(current, FRAME, SAMPLE_RATE, noise, prefs)
@@ -543,59 +578,8 @@ class EdithService : Service() {
         }
     }
 
-    /** Conversation mode: transcribe one sentence and let the server decide if it was for EDITH. */
-    private fun submitConversationSegment(wav: ByteArray, prefs: Prefs) {
-        conversationPending.incrementAndGet()
-        meetingWorker.execute {
-            try {
-                val api = EdithApi(prefs.serverUrl, prefs.password)
-                val lang = Locale.getDefault().toLanguageTag()
-                val text = api.transcribe(wav, lang, prefs.hearingHints())
-                if (text.isBlank()) return@execute
-                EdithState.update(heard = text)
-                if (handleLocalReply(text, prefs)) {
-                    conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
-                    return@execute
-                }
-                val hist = synchronized(history) { history.toList() }
-                val res = api.assistant(text, hist, lang, followup = true, address = prefs.address)
-                if (res.kind != "ignore") logDecision(text, res)
-                when (res.kind) {
-                    "ignore" -> Unit // side conversation: not for EDITH
-                    "end" -> {
-                        conversationEnd.set(true)
-                        speakWhisper(res.say.ifBlank { "Okay." })
-                    }
-                    else -> {
-                        conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
-                        EdithState.update(question = text, answer = "")
-                        val spoken = speakingDuring {
-                            res.action?.let { performAction(it, res.say, prefs) }
-                                ?: res.reply.ifBlank { "I don't have an answer for that." }.also {
-                                    EdithState.update(answer = it)
-                                    speak(it)
-                                }
-                        }
-                        synchronized(history) {
-                            history.addLast(EdithApi.Turn("user", text))
-                            history.addLast(EdithApi.Turn("assistant", spoken))
-                            while (history.size > 12) history.removeFirst()
-                        }
-                        conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
-                        forceConversation = false
-                    }
-                }
-            } catch (e: EdithException) {
-                EdithState.update(heard = "⚠ ${e.message}")
-            } catch (e: Exception) {
-                Log.e(TAG, "Conversation task failed", e)
-                EdithState.log("Error: ${e.javaClass.simpleName}: ${e.message}")
-                speakWhisper("Something went wrong: ${e.javaClass.simpleName}.")
-            } finally {
-                conversationPending.decrementAndGet()
-            }
-        }
-    }
+    /** Conversation mode: one sentence; the server decides if it was meant for EDITH (streamed). */
+    private fun submitConversationSegment(wav: ByteArray, prefs: Prefs) = submitAnswer(wav, prefs, followup = true)
 
     private fun logDecision(heard: String, res: EdithApi.Assistant) {
         val what = when {
@@ -746,44 +730,187 @@ class EdithService : Service() {
         beep()
         mic.flush() // don't record the beep
         setStatus("Listening to your question…")
-        val wav = recordQuestion(mic, frame, rate, noise)
+        val wav = recordQuestion(mic, frame, rate, noise, endPause = prefs.endPause)
         if (wav == null) {
             speak("I didn't hear a question.")
             return
         }
         setStatus("Thinking…")
+        submitAnswer(wav, prefs, followup = false)
+    }
+
+    /**
+     * While EDITH talks: "Edith" or "stop" interrupts her (Vosk runs on the phone, no network).
+     * "Edith" also starts a new question. Returns true when it interrupted.
+     */
+    private fun bargeIn(recognizer: Recognizer, buf: ShortArray, level: Double, noise: Double): Boolean {
+        val final = recognizer.acceptWaveForm(buf, buf.size)
+        val text = if (final) jsonText(recognizer.result, "text") else jsonText(recognizer.partialResult, "partial")
+        val words = text.split(' ').filter { it.isNotBlank() }
+        val stop = words.lastOrNull() == "stop" && words.size <= 3
+        val wake = final && isWakeWord(text, true)
+        if (!stop && !wake) return false
+        recognizer.reset()
+        cancelAnswer.set(true)
+        stopSpeakingNow()
+        EdithState.log(if (wake) "Barge-in: \"Edith\" – listening" else "Barge-in: stopped")
+        if (wake) askNow.set(true)
+        return true
+    }
+
+    private var keepWarm: java.util.concurrent.ScheduledExecutorService? = null
+
+    /**
+     * Render's free plan sleeps after ~15 idle minutes, making the next answer take 30-60 s.
+     * While EDITH is running, a tiny health check every 9 minutes keeps the server awake.
+     */
+    private fun startKeepWarm() {
+        keepWarm = java.util.concurrent.Executors.newSingleThreadScheduledExecutor().also { ex ->
+            ex.scheduleWithFixedDelay({
+                val p = Prefs(this)
+                if (running.get() && p.serverUrl.isNotBlank()) runCatching { EdithApi(p.serverUrl, p.password).health() }
+            }, 0, 9, TimeUnit.MINUTES)
+        }
+    }
+
+    /** Device context for time/date/battery answers. */
+    private fun deviceContext(): EdithApi.Device {
+        val battery = runCatching {
+            getSystemService(android.os.BatteryManager::class.java)
+                .getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 0..100 }
+        }.getOrNull()
+        return EdithApi.Device(java.time.OffsetDateTime.now().toString(), battery)
+    }
+
+    /** Set by barge-in ("Edith" / "stop" while EDITH talks) to abandon the current answer. */
+    private val cancelAnswer = AtomicBoolean(false)
+
+    /**
+     * Answers a recorded question on the worker thread: one streamed request (audio in, words out),
+     * speaking each sentence as soon as it arrives. The listener keeps running meanwhile.
+     */
+    private fun submitAnswer(wav: ByteArray, prefs: Prefs, followup: Boolean) {
+        val speechEnd = System.currentTimeMillis()
+        conversationPending.incrementAndGet()
+        meetingWorker.execute {
+            try {
+                answer(wav, prefs, followup, speechEnd)
+            } catch (e: EdithException) {
+                if (followup) EdithState.update(heard = "⚠ ${e.message}")
+                else { EdithState.update(answer = "⚠ ${e.message}"); speak(e.message ?: "Something went wrong.") }
+            } catch (e: Exception) {
+                Log.e(TAG, "Answer failed", e)
+                EdithState.log("Error: ${e.javaClass.simpleName}: ${e.message}")
+                speakWhisper("Something went wrong: ${e.javaClass.simpleName}.")
+            } finally {
+                conversationPending.decrementAndGet()
+            }
+        }
+    }
+
+    private fun answer(wav: ByteArray, prefs: Prefs, followup: Boolean, speechEnd: Long) {
         val api = EdithApi(prefs.serverUrl, prefs.password)
         val lang = Locale.getDefault().toLanguageTag()
-        try {
-            val question = api.transcribe(wav, lang, prefs.hearingHints())
-            if (question.isBlank()) {
-                speak("Sorry, I didn't catch that.")
+        val hist = synchronized(history) { history.toList() }
+        cancelAnswer.set(false)
+        firstAudioAt = 0L
+        var transcript = ""
+        var sttAt = 0L
+        var firstTokenAt = 0L
+        var route = ""
+        var kind = "answer"
+        var action: org.json.JSONObject? = null
+        var say = ""
+        val text = StringBuilder()
+        val speaker = StreamingSpeaker(prefs)
+        var lastUi = 0L
+
+        val onEvent: (org.json.JSONObject) -> Boolean = handler@{ ev ->
+            if (cancelAnswer.get()) return@handler false
+            when (ev.optString("type")) {
+                "transcript" -> {
+                    transcript = ev.optString("text").trim()
+                    sttAt = System.currentTimeMillis()
+                    if (followup) EdithState.update(heard = transcript) else EdithState.update(question = transcript, answer = "")
+                }
+                "meta" -> route = ev.optString("route")
+                "token" -> {
+                    if (firstTokenAt == 0L) {
+                        firstTokenAt = System.currentTimeMillis()
+                        if (followup) EdithState.update(question = transcript, answer = "")
+                        setStatus("Speaking…")
+                    }
+                    val t = ev.optString("t")
+                    text.append(t)
+                    speaker.feed(t)
+                    val now = System.currentTimeMillis()
+                    if (now - lastUi > 120) { lastUi = now; EdithState.update(answer = text.toString()) }
+                }
+                "action" -> { kind = "action"; action = ev.optJSONObject("action"); say = ev.optString("say") }
+                "ignore" -> kind = "ignore"
+                "end" -> { kind = "end"; say = ev.optString("say") }
+            }
+            true
+        }
+
+        // Replies to "Should I send it?" / "Which one?" / lead lists are handled on the phone first.
+        if (pendingConfirm != null || pendingChoice != null || leadSession != null) {
+            transcript = api.transcribe(wav, lang, prefs.hearingHints()).trim()
+            sttAt = System.currentTimeMillis()
+            if (transcript.isBlank()) return
+            EdithState.update(heard = transcript)
+            if (handleLocalReply(transcript, prefs)) {
+                conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
                 return
             }
-            EdithState.update(question = question, answer = "")
-            if (handleLocalReply(question, prefs)) return
-            val result = api.assistant(question, synchronized(history) { history.toList() }, lang, address = prefs.address)
-            logDecision(question, result)
-            val spoken = result.action?.let { performAction(it, result.say, prefs) }
-                ?: result.reply.ifBlank { "I don't have an answer for that." }.also {
-                    EdithState.update(answer = it)
-                    setStatus("Speaking…")
-                    speak(it)
-                }
-            synchronized(history) {
-                history.addLast(EdithApi.Turn("user", question))
-                history.addLast(EdithApi.Turn("assistant", spoken))
-                while (history.size > 12) history.removeFirst()
-            }
-        } catch (e: EdithException) {
-            EdithState.update(answer = "⚠ ${e.message}")
-            speak(e.message ?: "Something went wrong.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Question failed", e)
-            EdithState.log("Error: ${e.javaClass.simpleName}: ${e.message}")
-            EdithState.update(answer = "⚠ ${e.javaClass.simpleName}: ${e.message}")
-            speak("Something went wrong: ${e.javaClass.simpleName}.")
+            api.assistantStream(transcript, hist, lang, followup, prefs.address, deviceContext(), onEvent)
+        } else {
+            api.voiceAsk(wav, lang, prefs.hearingHints(), hist, followup, prefs.address, deviceContext(), onEvent)
         }
+        if (cancelAnswer.get()) {
+            EdithState.log("Interrupted")
+            return
+        }
+        if (transcript.isBlank()) {
+            if (!followup) speak("Sorry, I didn't catch that.")
+            return
+        }
+        when (kind) {
+            "ignore" -> return // side conversation: not for EDITH
+            "end" -> {
+                conversationEnd.set(true)
+                speakWhisper(say.ifBlank { "Okay." })
+                return
+            }
+        }
+        conversationUntil = System.currentTimeMillis() + CONVERSATION_MS
+        val spoken = if (kind == "action" && action != null) {
+            EdithState.log("Heard \"${transcript.take(60)}\" → action ${action!!.optString("type")}")
+            speakingDuring { performAction(action!!, say, prefs) }
+        } else {
+            val reply = text.toString().trim().ifBlank { "I don't have an answer for that." }
+            if (text.isBlank()) speaker.feed(reply)
+            EdithState.update(answer = reply)
+            speaker.finish(wait = false)
+            reply
+        }
+        synchronized(history) {
+            history.addLast(EdithApi.Turn("user", transcript))
+            history.addLast(EdithApi.Turn("assistant", spoken))
+            while (history.size > 12) history.removeFirst()
+        }
+        forceConversation = false
+        // Wait (briefly) for the first audio so the timing includes the voice actually starting.
+        val until = System.currentTimeMillis() + 4000
+        while (firstAudioAt == 0L && kind == "answer" && System.currentTimeMillis() < until && !cancelAnswer.get()) Thread.sleep(20)
+        recordTiming(speechEnd, sttAt, firstTokenAt, firstAudioAt, route)
+    }
+
+    private fun recordTiming(speechEnd: Long, sttAt: Long, firstToken: Long, firstAudio: Long, route: String) {
+        fun s(t: Long) = if (t > 0) "%.2fs".format((t - speechEnd) / 1000.0) else "–"
+        EdithState.log("⏱ text ${s(sttAt)} · first words ${s(firstToken)} · voice ${s(firstAudio)}" +
+            if (route.isNotBlank()) " · $route" else "")
+        if (firstAudio > 0) EdithState.speed((firstAudio - speechEnd).toInt())
     }
 
     /** Runs a phone action (call, open app, music, ...). Returns what EDITH said, for the history. */
@@ -1083,7 +1210,8 @@ class EdithService : Service() {
      * Records until the speaker pauses. [long] = dictation: allows longer pauses and up to 60 s.
      * Returns WAV bytes, or null if nobody spoke.
      */
-    private fun recordQuestion(mic: Mic, frame: Int, rate: Int, noise: Double, long: Boolean = false): ByteArray? {
+    private fun recordQuestion(mic: Mic, frame: Int, rate: Int, noise: Double, long: Boolean = false,
+                               endPause: Float = 1.3f): ByteArray? {
         val pcm = ByteArrayOutputStream()
         val buf = ShortArray(frame)
         val framesPerSec = rate / frame
@@ -1093,7 +1221,7 @@ class EdithService : Service() {
         var silentFrames = 0
         var total = 0
         val waitForSpeech = framesPerSec * (if (long) 8 else 7)                 // time to start talking
-        val endSilence = (framesPerSec * (if (long) 2.6 else 1.7)).toInt()     // pause that ends it
+        val endSilence = (framesPerSec * (if (long) 2.6f else endPause)).toInt() // pause that ends it
         val maxFrames = framesPerSec * (if (long) 60 else 25)
         var failures = 0
         while (running.get() && total < maxFrames) {
@@ -1175,7 +1303,7 @@ class EdithService : Service() {
         return try {
             file.writeBytes(audio)
             val done = CountDownLatch(1)
-            val player = android.media.MediaPlayer()
+            val player = android.media.MediaPlayer().also { humanPlayer = it }
             val usage = if (routing.headsetActive) AudioAttributes.USAGE_VOICE_COMMUNICATION
             else AudioAttributes.USAGE_ASSISTANT
             player.setAudioAttributes(AudioAttributes.Builder().setUsage(usage)
@@ -1192,30 +1320,102 @@ class EdithService : Service() {
             Log.w(TAG, "human voice playback failed", e)
             false
         } finally {
+            humanPlayer = null
             file.delete()
         }
     }
 
-    private fun speakDevice(text: String) {
-        val engine = tts ?: return
-        if (!ttsReady.await(5, TimeUnit.SECONDS)) return
-        PhoneVoice.apply(engine, Prefs(this))
-        val usage = if (routing.headsetActive) AudioAttributes.USAGE_VOICE_COMMUNICATION
-        else AudioAttributes.USAGE_ASSISTANT
-        engine.setAudioAttributes(
-            AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
-        )
-        val done = CountDownLatch(1)
+    // ------------------------------------------------------------------ speech output queue
+
+    private val utterances = java.util.concurrent.ConcurrentHashMap<String, CountDownLatch>()
+    private val ttsActive = java.util.concurrent.atomic.AtomicInteger(0)
+    @Volatile private var firstAudioAt = 0L
+    @Volatile private var humanPlayer: android.media.MediaPlayer? = null
+
+    private fun installTtsListener(engine: TextToSpeech) {
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) = done.countDown()
+            override fun onStart(utteranceId: String?) {
+                if (firstAudioAt == 0L) firstAudioAt = System.currentTimeMillis()
+            }
+            override fun onDone(utteranceId: String?) = finished(utteranceId)
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) = done.countDown()
-            override fun onStop(utteranceId: String?, interrupted: Boolean) = done.countDown()
+            override fun onError(utteranceId: String?) = finished(utteranceId)
+            override fun onStop(utteranceId: String?, interrupted: Boolean) = finished(utteranceId)
         })
+    }
+
+    private fun finished(id: String?) {
+        if (id != null && utterances.remove(id)?.also { it.countDown() } != null) {
+            ttsActive.updateAndGet { maxOf(0, it - 1) }
+        }
+    }
+
+    /** True while EDITH is talking or an answer is still coming in. */
+    private fun busySpeaking(): Boolean = speaking || ttsActive.get() > 0 || humanPlayer != null
+
+    /** Queues [text] on the phone voice without waiting. Returns a latch that opens when it's spoken. */
+    private fun enqueueSpeech(text: String): CountDownLatch? {
+        val engine = tts ?: return null
+        if (!ttsReady.await(5, TimeUnit.SECONDS)) return null
+        val usage = if (routing.headsetActive) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_ASSISTANT
+        engine.setAudioAttributes(AudioAttributes.Builder().setUsage(usage)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+        val id = "edith-${System.nanoTime()}"
+        val latch = CountDownLatch(1)
+        utterances[id] = latch
+        ttsActive.incrementAndGet()
         val clipped = text.take(TextToSpeech.getMaxSpeechInputLength() - 1)
-        engine.speak(clipped, TextToSpeech.QUEUE_FLUSH, null, "edith-${System.nanoTime()}")
-        done.await(90, TimeUnit.SECONDS)
+        if (engine.speak(clipped, TextToSpeech.QUEUE_ADD, null, id) != TextToSpeech.SUCCESS) finished(id)
+        return latch
+    }
+
+    /** Barge-in / "stop": silence EDITH immediately. */
+    private fun stopSpeakingNow() {
+        tts?.stop()
+        utterances.keys.toList().forEach { finished(it) }
+        ttsActive.set(0)
+        humanPlayer?.let { runCatching { it.stop() } }
+    }
+
+    private fun speakDevice(text: String) {
+        PhoneVoice.apply(tts ?: return, Prefs(this))
+        enqueueSpeech(text)?.await(90, TimeUnit.SECONDS)
+    }
+
+    /**
+     * Speaks a streamed answer sentence by sentence as the words arrive, so EDITH starts talking
+     * long before the full answer is ready.
+     */
+    private inner class StreamingSpeaker(private val prefs: Prefs) {
+        private val buf = StringBuilder()
+        private val human = prefs.humanVoice && !humanVoiceUnavailable && System.currentTimeMillis() > humanVoicePausedUntil
+        private val all = StringBuilder()
+        private var last: CountDownLatch? = null
+
+        init { tts?.let { PhoneVoice.apply(it, prefs) } }
+
+        fun feed(piece: String) {
+            all.append(piece)
+            if (human) return
+            buf.append(piece)
+            val cut = speakableEnd(buf)
+            if (cut <= 0) return
+            val sentence = buf.substring(0, cut).trim()
+            buf.delete(0, cut)
+            if (sentence.isNotBlank()) last = enqueueSpeech(sentence)
+        }
+
+        /** Speaks what's left; with [wait] blocks until EDITH has finished talking. */
+        fun finish(wait: Boolean) {
+            if (human) {
+                if (all.isNotBlank()) speak(all.toString())
+                return
+            }
+            val rest = buf.toString().trim()
+            buf.clear()
+            if (rest.isNotBlank()) last = enqueueSpeech(rest)
+            if (wait) last?.await(120, TimeUnit.SECONDS)
+        }
     }
 
     private fun setupMediaButton() {
@@ -1316,6 +1516,21 @@ class EdithService : Service() {
         private const val TAG = "Edith"
         private const val CHANNEL = "edith_listening"
         private const val NOTIFICATION_ID = 7
+        private val SPEAK_BREAK = Regex("[.!?…](\\s|$)|[,;:]\\s")
+
+        /**
+         * Where the text gathered so far can be handed to the voice: after a sentence end (or a
+         * comma once the phrase is long), never mid-word. Returns the cut index, or 0 to keep waiting.
+         */
+        fun speakableEnd(text: CharSequence): Int {
+            val s = text.toString()
+            val m = SPEAK_BREAK.findAll(s).lastOrNull { mm ->
+                val ch = s[mm.range.first]
+                (ch in ".!?…" && mm.range.first >= 12) || (ch in ",;:" && mm.range.first >= 60)
+            } ?: return 0
+            return m.range.last + 1
+        }
+
         private const val SAMPLE_RATE = 16000
         private const val CONVERSATION_MS = 120_000L // 2 minutes without a question for EDITH
         private val YES_RE = Regex("^(yes|yeah|yep|yup|ya|sure|ok|okay|send|go ahead|do it|confirm|please do|haan|han|ha|ji|correct|right)\\b")
@@ -1337,7 +1552,7 @@ class EdithService : Service() {
          */
         private val WAKE_GRAMMAR: String = JSONArray(
             listOf(
-                "edith", "hey edith",
+                "edith", "hey edith", "stop", "edith stop", "stop edith", "okay stop",
                 "eat it", "eat", "it", "edit", "eddie", "eighty", "each", "edison", "ready", "headed",
                 "today", "a", "the", "i", "is", "it's", "did", "with", "hey", "eat this", "need it",
                 "read it", "heat", "meet", "seat it", "[unk]",

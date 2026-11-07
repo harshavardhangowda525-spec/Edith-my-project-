@@ -37,6 +37,13 @@ def _host(url: str) -> str:
     return urlsplit(url if "://" in url else "https://" + url).hostname or ""
 
 
+# Default fast / deep models per provider (AI_MODEL is the balanced one). Override with
+# AI_MODEL_FAST / AI_MODEL_DEEP. Providers not listed use AI_MODEL for every route.
+ROUTE_PRESETS: dict[str, tuple[str, str]] = {
+    "groq": ("llama-3.1-8b-instant", "openai/gpt-oss-120b"),
+    "anthropic": ("claude-haiku-5-5", "claude-opus-5-5"),
+}
+
 ANTHROPIC_DEFAULT_URL = "https://api.anthropic.com/v1"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
 # Server speech-to-text services (OpenAI-compatible /audio/transcriptions): (base_url, stt_model)
@@ -74,6 +81,15 @@ class Settings(BaseSettings):
     ai_base_url: str = ""
     ai_model: str = ""
     ai_allowed_models: str = ""  # comma-separated whitelist users may pick from
+    # Model routing: simple requests -> fast model, coding -> AI_MODEL, hard multi-step -> deep model.
+    ai_routing: Literal["auto", "off"] = "auto"
+    ai_model_fast: str = ""
+    ai_model_deep: str = ""
+    # Latency budgets (seconds) per route; a slower/failed model falls back to the next one.
+    route_timeout_fast: float = 12.0
+    route_timeout_balanced: float = 30.0
+    route_timeout_deep: float = 60.0
+    ai_max_output_tokens_deep: int = 2000
     ai_timeout_seconds: float = 30.0
     ai_max_output_tokens: int = 600
     ai_temperature: float = 0.4
@@ -257,6 +273,18 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def route_model(self, route: str) -> str:
+        """Model for a route: 'fast', 'balanced' or 'deep'."""
+        if route == "balanced" or self.ai_routing == "off":
+            return self.ai_model
+        preset = ROUTE_PRESETS.get(self.ai_provider)
+        if route == "fast":
+            return self.ai_model_fast.strip() or (preset[0] if preset else self.ai_model)
+        return self.ai_model_deep.strip() or (preset[1] if preset else self.ai_model)
+
+    def route_timeout(self, route: str) -> float:
+        return {"fast": self.route_timeout_fast, "deep": self.route_timeout_deep}.get(route, self.route_timeout_balanced)
 
     @property
     def allowed_model_list(self) -> list[str]:

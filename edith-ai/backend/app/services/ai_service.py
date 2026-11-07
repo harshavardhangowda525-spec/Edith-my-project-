@@ -7,16 +7,21 @@ provider lets the whole stack run offline and is always labeled as such.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
-from dataclasses import dataclass
-from typing import Protocol
+import time
+from dataclasses import dataclass, field
+from typing import AsyncIterator, Protocol
 
 import httpx
 
 from app.config import Settings
 from app.errors import ConfigurationError, ProviderError, ProviderTimeout, ValidationFailed
 from app.models.schemas import ChatTurn, Source
+from app.services.http import shared_client
+from app.services.metrics import Metrics
+from app.services.router import ROUTES, CircuitBreaker, classify, fallback_order
 
 log = logging.getLogger("edith.ai")
 
@@ -56,6 +61,27 @@ class Completion:
     model: str
     provider: str
     mock: bool
+    usage: dict = field(default_factory=dict)
+
+
+@dataclass
+class Delta:
+    """One streamed piece: text, or (at the end) token usage."""
+    text: str = ""
+    usage: dict = field(default_factory=dict)
+    model: str | None = None
+
+
+def _sse_json(line: str) -> dict | None:
+    if not line.startswith("data:"):
+        return None
+    data = line[5:].strip()
+    if not data or data == "[DONE]":
+        return None
+    try:
+        return json.loads(data)
+    except ValueError:
+        return None
 
 
 class Provider(Protocol):
@@ -135,26 +161,72 @@ class OpenAICompatibleProvider:
                 return wanted
         return next((i for i in sorted(ids) if not _NOT_CHAT.search(i)), None)
 
-    async def complete(self, system: str, messages: list[dict[str, str]], model: str) -> Completion:
+    def _payload(self, system: str, messages: list[dict[str, str]], model: str, max_tokens: int | None) -> dict:
+        p = {"model": model, "messages": [{"role": "system", "content": system}, *messages],
+             "max_tokens": max_tokens or self.s.ai_max_output_tokens, "temperature": self.s.ai_temperature}
+        if "gpt-oss" in model:  # reasoning model on Groq: keep its thinking short for speed
+            p["reasoning_effort"] = "medium"
+        return p
+
+    async def stream(self, system: str, messages: list[dict[str, str]], model: str, *,
+                     max_tokens: int | None = None, timeout: float | None = None) -> AsyncIterator[Delta]:
+        """Server-sent token stream (/chat/completions with stream=true)."""
+        if model == self.s.ai_model and self._replacement_model:
+            model = self._replacement_model
+        headers = {"Authorization": f"Bearer {self.s.ai_api_key}"} if self.s.ai_api_key else {}
+        url = self.s.ai_base_url.rstrip("/") + "/chat/completions"
+        body = {**self._payload(system, messages, model, max_tokens), "stream": True}
+        t = httpx.Timeout(timeout or self.s.ai_timeout_seconds, connect=10.0)
+        async with _client(self.client, self.s.ai_timeout_seconds) as c:
+            try:
+                async with c.stream("POST", url, json=body, headers=headers, timeout=t) as r:
+                    if r.status_code >= 400:
+                        await r.aread()
+                        if _is_model_missing(r) or r.status_code == 404:
+                            alt = await self._available_model(c, headers)
+                            if alt and alt != model:
+                                log.warning("AI model '%s' unavailable; streaming with '%s'", model, alt)
+                                self._replacement_model = alt
+                                async for d in self.stream(system, messages, alt, max_tokens=max_tokens, timeout=timeout):
+                                    yield d
+                                return
+                        _raise_for_status(r, self.name.capitalize(), model=model, url=url)
+                    async for line in r.aiter_lines():
+                        obj = _sse_json(line)
+                        if obj is None:
+                            continue
+                        choices = obj.get("choices") or []
+                        piece = (choices[0].get("delta") or {}).get("content") if choices else None
+                        if piece:
+                            yield Delta(text=piece, model=obj.get("model"))
+                        usage = obj.get("usage") or (obj.get("x_groq") or {}).get("usage")
+                        if usage:
+                            yield Delta(usage=usage, model=obj.get("model"))
+            except httpx.TimeoutException as exc:
+                raise ProviderTimeout("The AI provider timed out") from exc
+            except httpx.HTTPError as exc:
+                raise ProviderError("Could not reach the AI provider") from exc
+
+    async def complete(self, system: str, messages: list[dict[str, str]], model: str, *,
+                       max_tokens: int | None = None, timeout: float | None = None) -> Completion:
         if model == self.s.ai_model and self._replacement_model:
             model = self._replacement_model
         headers = {"Authorization": f"Bearer {self.s.ai_api_key}"} if self.s.ai_api_key else {}
         url = self.s.ai_base_url.rstrip("/") + "/chat/completions"
 
         def payload(m: str) -> dict:
-            return {"model": m, "messages": [{"role": "system", "content": system}, *messages],
-                    "max_tokens": self.s.ai_max_output_tokens, "temperature": self.s.ai_temperature}
+            return self._payload(system, messages, m, max_tokens)
 
         try:
             async with _client(self.client, self.s.ai_timeout_seconds) as c:
-                r = await c.post(url, json=payload(model), headers=headers)
+                r = await c.post(url, json=payload(model), headers=headers, timeout=timeout or self.s.ai_timeout_seconds)
                 if _is_model_missing(r) or r.status_code == 404:
                     # The model was renamed/retired (or mistyped): switch to one the provider offers.
                     alt = await self._available_model(c, headers)
                     if alt and alt != model:
                         log.warning("AI model '%s' unavailable at %s; using '%s' instead. "
                                     "Set AI_MODEL to choose a model.", model, self.name, alt)
-                        r = await c.post(url, json=payload(alt), headers=headers)
+                        r = await c.post(url, json=payload(alt), headers=headers, timeout=timeout or self.s.ai_timeout_seconds)
                         if r.status_code < 400:
                             self._replacement_model = alt
                             model = alt
@@ -168,7 +240,9 @@ class OpenAICompatibleProvider:
             text = data["choices"][0]["message"]["content"] or ""
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise ProviderError("AI provider returned an unexpected response") from exc
-        return Completion(text=text.strip(), model=data.get("model", model), provider=self.name, mock=False)
+        u = data.get("usage") or {}
+        return Completion(text=text.strip(), model=data.get("model", model), provider=self.name, mock=False,
+                          usage=u if isinstance(u, dict) else {})
 
 
 class AnthropicProvider:
@@ -181,15 +255,52 @@ class AnthropicProvider:
         self.s = settings
         self.client = client
 
-    async def complete(self, system: str, messages: list[dict[str, str]], model: str) -> Completion:
+    def _url(self) -> str:
         base = self.s.ai_base_url.rstrip("/")
-        url = self.API_URL if "openai.com" in base else base + "/messages"
+        return self.API_URL if "openai.com" in base else base + "/messages"
+
+    async def stream(self, system: str, messages: list[dict[str, str]], model: str, *,
+                     max_tokens: int | None = None, timeout: float | None = None) -> AsyncIterator[Delta]:
+        url = self._url()
+        payload = {"model": model, "system": system, "messages": messages, "stream": True,
+                   "max_tokens": max_tokens or self.s.ai_max_output_tokens, "temperature": self.s.ai_temperature}
+        headers = {"x-api-key": self.s.ai_api_key or "", "anthropic-version": "2023-06-01"}
+        usage: dict = {}
+        async with _client(self.client, self.s.ai_timeout_seconds) as c:
+            try:
+                async with c.stream("POST", url, json=payload, headers=headers,
+                                    timeout=httpx.Timeout(timeout or self.s.ai_timeout_seconds, connect=10.0)) as r:
+                    if r.status_code >= 400:
+                        await r.aread()
+                        _raise_for_status(r, "Anthropic", model=model, url=url)
+                    async for line in r.aiter_lines():
+                        obj = _sse_json(line)
+                        if not obj:
+                            continue
+                        kind = obj.get("type")
+                        if kind == "content_block_delta" and (obj.get("delta") or {}).get("type") == "text_delta":
+                            yield Delta(text=obj["delta"].get("text", ""), model=model)
+                        elif kind == "message_start":
+                            u = (obj.get("message") or {}).get("usage") or {}
+                            usage["prompt_tokens"] = u.get("input_tokens", 0)
+                        elif kind == "message_delta":
+                            usage["completion_tokens"] = (obj.get("usage") or {}).get("output_tokens", 0)
+            except httpx.TimeoutException as exc:
+                raise ProviderTimeout("The AI provider timed out") from exc
+            except httpx.HTTPError as exc:
+                raise ProviderError("Could not reach the AI provider") from exc
+        if usage:
+            yield Delta(usage=usage, model=model)
+
+    async def complete(self, system: str, messages: list[dict[str, str]], model: str, *,
+                       max_tokens: int | None = None, timeout: float | None = None) -> Completion:
+        url = self._url()
         payload = {"model": model, "system": system, "messages": messages,
-                   "max_tokens": self.s.ai_max_output_tokens, "temperature": self.s.ai_temperature}
+                   "max_tokens": max_tokens or self.s.ai_max_output_tokens, "temperature": self.s.ai_temperature}
         headers = {"x-api-key": self.s.ai_api_key or "", "anthropic-version": "2023-06-01"}
         try:
             async with _client(self.client, self.s.ai_timeout_seconds) as c:
-                r = await c.post(url, json=payload, headers=headers)
+                r = await c.post(url, json=payload, headers=headers, timeout=timeout or self.s.ai_timeout_seconds)
         except httpx.TimeoutException as exc:
             raise ProviderTimeout("The AI provider timed out") from exc
         except httpx.HTTPError as exc:
@@ -208,7 +319,12 @@ class MockProvider:
 
     name = "mock"
 
-    async def complete(self, system: str, messages: list[dict[str, str]], model: str) -> Completion:
+    async def stream(self, system: str, messages: list[dict[str, str]], model: str, **_: object) -> AsyncIterator[Delta]:
+        c = await self.complete(system, messages, model)
+        for i, word in enumerate(c.text.split(" ")):
+            yield Delta(text=word if i == 0 else " " + word, model=c.model)
+
+    async def complete(self, system: str, messages: list[dict[str, str]], model: str, **_: object) -> Completion:
         last = messages[-1]["content"] if messages else ""
         grounded = "Document excerpts:" in system
         parts = [f"[Mock mode] I received: \"{last[:200]}\"."]
@@ -227,14 +343,11 @@ class _client:
         self.owned: httpx.AsyncClient | None = None
 
     async def __aenter__(self) -> httpx.AsyncClient:
-        if self.injected:
-            return self.injected
-        self.owned = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=10.0))
-        return self.owned
+        # Re-use one pooled connection to the provider instead of a new TLS handshake per request.
+        return self.injected or shared_client()
 
     async def __aexit__(self, *exc: object) -> None:
-        if self.owned:
-            await self.owned.aclose()
+        return None
 
 
 def build_provider(settings: Settings) -> Provider:
@@ -266,10 +379,15 @@ def build_system_prompt(mode: str, memories: list[str], sources: list[Source],
     return "\n\n".join(parts)
 
 
+_RETRIABLE = {"provider_rate_limited", "provider_error", "provider_not_found", "provider_timeout"}
+
+
 class AIService:
-    def __init__(self, settings: Settings, provider: Provider | None = None) -> None:
+    def __init__(self, settings: Settings, provider: Provider | None = None, metrics: Metrics | None = None) -> None:
         self.settings = settings
         self._provider = provider
+        self.metrics = metrics or Metrics()
+        self.breaker = CircuitBreaker()
 
     @property
     def provider(self) -> Provider:
@@ -284,14 +402,107 @@ class AIService:
             raise ValidationFailed(f"Model '{requested}' is not enabled on this server")
         return requested
 
-    async def chat(self, message: str, history: list[ChatTurn], *, mode: str = "earbud",
-                   model: str | None = None, memories: list[str] | None = None,
-                   sources: list[Source] | None = None, language: str | None = None,
-                   address: str | None = None) -> Completion:
+    def pick_route(self, message: str, requested: str | None, history_len: int, has_sources: bool) -> str:
+        if requested in ROUTES:
+            return requested  # manual override
+        return classify(message, history_len, has_sources)
+
+    def candidates(self, route: str, model: str | None) -> list[tuple[str, str]]:
+        """(route, model) pairs to try in order; models with an open circuit go last."""
+        if model:
+            return [(route, self.resolve_model(model))]
+        seen, out = set(), []
+        for r in fallback_order(route):
+            m = self.settings.route_model(r)
+            if m not in seen:
+                seen.add(m)
+                out.append((r, m))
+        return sorted(out, key=lambda rm: not self.breaker.available(rm[1]))
+
+    def _limits(self, route: str) -> tuple[int, float]:
+        tokens = self.settings.ai_max_output_tokens_deep if route == "deep" else self.settings.ai_max_output_tokens
+        return tokens, self.settings.route_timeout(route)
+
+    async def stream_chat(self, message: str, history: list[ChatTurn], *, mode: str = "earbud",
+                          route: str | None = None, model: str | None = None,
+                          memories: list[str] | None = None, sources: list[Source] | None = None,
+                          language: str | None = None, address: str | None = None) -> AsyncIterator[dict]:
+        """Yields {"type": "meta"|"token"|"done", ...}. Falls back to the next model if one fails
+        before its first token (rate limit, timeout, outage)."""
         system = build_system_prompt(mode, memories or [], sources or [], language, address)
         msgs = [{"role": t.role, "content": t.content} for t in history[-12:]]
         msgs.append({"role": "user", "content": message})
-        resolved = self.resolve_model(model)
-        log.info("chat request provider=%s model=%s mode=%s turns=%d sources=%d",
-                 self.provider.name, resolved, mode, len(msgs), len(sources or []))
-        return await self.provider.complete(system, msgs, resolved)
+        chosen = self.pick_route(message, route, len(history), bool(sources))
+        last_error: Exception | None = None
+        for r, m in self.candidates(chosen, model):
+            max_tokens, timeout = self._limits(r)
+            t0 = time.perf_counter()
+            first: float | None = None
+            usage: dict = {}
+            served_model = m
+            self.metrics.count("ai_requests")
+            try:
+                yield {"type": "meta", "route": r, "model": m, "requested_route": chosen}
+                stream = getattr(self.provider, "stream", None)
+                if stream is None:  # provider without streaming: one piece
+                    c = await self.provider.complete(system, msgs, m)
+                    first = time.perf_counter()
+                    served_model = c.model or m
+                    usage = c.usage
+                    yield {"type": "token", "t": c.text, "mock": c.mock}
+                else:
+                    async for d in stream(system, msgs, m, max_tokens=max_tokens, timeout=timeout):
+                        if d.model:
+                            served_model = d.model
+                        if d.usage:
+                            usage = d.usage
+                        if d.text:
+                            if first is None:
+                                first = time.perf_counter()
+                                self.metrics.observe(f"ai_first_token_ms.{r}", (first - t0) * 1000)
+                            yield {"type": "token", "t": d.text, "mock": self.provider.name == "mock"}
+                total = (time.perf_counter() - t0) * 1000
+                self.metrics.observe(f"ai_total_ms.{r}", total)
+                self.metrics.tokens(served_model, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+                self.breaker.success(m)
+                yield {"type": "done", "route": r, "model": served_model, "usage": usage,
+                       "first_token_ms": round(((first or time.perf_counter()) - t0) * 1000, 1),
+                       "total_ms": round(total, 1)}
+                return
+            except (ProviderError, ProviderTimeout) as exc:
+                self.metrics.count("ai_failures")
+                code = getattr(exc, "code", "")
+                self.breaker.failure(m, rate_limited=code == "provider_rate_limited")
+                last_error = exc
+                if first is not None or code not in _RETRIABLE:
+                    raise  # already speaking, or not something another model can fix (e.g. bad key)
+                self.metrics.count("ai_fallbacks")
+                log.warning("model %s failed (%s); trying fallback", m, code)
+        if last_error:
+            raise last_error
+        raise ProviderError("No AI model available")
+
+    async def chat(self, message: str, history: list[ChatTurn], *, mode: str = "earbud",
+                   model: str | None = None, memories: list[str] | None = None,
+                   sources: list[Source] | None = None, language: str | None = None,
+                   address: str | None = None, route: str | None = None) -> Completion:
+        """Non-streaming answer. Without `route` it uses AI_MODEL as before; with a route it uses the
+        routed model and its fallbacks."""
+        if route is None:
+            system = build_system_prompt(mode, memories or [], sources or [], language, address)
+            msgs = [{"role": t.role, "content": t.content} for t in history[-12:]]
+            msgs.append({"role": "user", "content": message})
+            resolved = self.resolve_model(model)
+            log.info("chat request provider=%s model=%s mode=%s turns=%d sources=%d",
+                     self.provider.name, resolved, mode, len(msgs), len(sources or []))
+            return await self.provider.complete(system, msgs, resolved)
+        parts: list[str] = []
+        served, mock = model or self.settings.ai_model, False
+        async for ev in self.stream_chat(message, history, mode=mode, route=route, model=model, memories=memories,
+                                         sources=sources, language=language, address=address):
+            if ev["type"] == "token":
+                parts.append(ev["t"])
+                mock = mock or bool(ev.get("mock"))
+            elif ev["type"] == "done":
+                served = ev["model"]
+        return Completion(text="".join(parts).strip(), model=served, provider=self.provider.name, mock=mock)

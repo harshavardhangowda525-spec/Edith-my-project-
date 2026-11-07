@@ -367,7 +367,7 @@ async def understand(text: str, ai: AIService, allow_ai: bool = True) -> dict[st
         return validate_action(action)
     if not allow_ai or not COMMAND_HINTS.search(normalise(text)):
         return None
-    result = await ai.chat(CLASSIFY_PROMPT.format(text=text.replace('"', "'")[:500]), [], mode="detailed")
+    result = await ai.chat(CLASSIFY_PROMPT.format(text=text.replace('"', "'")[:500]), [], mode="detailed", route="fast")
     if result.mock:
         return None
     return validate_action(_extract_json(result.text))

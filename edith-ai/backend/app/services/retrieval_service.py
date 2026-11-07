@@ -13,6 +13,7 @@ from collections import Counter
 
 from app.errors import NotFoundError
 from app.models.schemas import Document, Source
+from app.services.cache import TTLCache
 from app.services.storage import ChunkRecord, Store
 
 CHUNK_CHARS = 900
@@ -58,10 +59,18 @@ def chunk_text(text: str, size: int = CHUNK_CHARS, overlap: int = CHUNK_OVERLAP)
 class RetrievalService:
     def __init__(self, store: Store) -> None:
         self.store = store
+        # Chunks are loaded per question; cache them briefly and drop on upload/delete.
+        self._chunks = TTLCache(ttl_s=60, max_items=500)
+
+    def _user_chunks(self, user_id: str, document_ids: list[str] | None) -> list[ChunkRecord]:
+        if document_ids:
+            return self.store.list_chunks(user_id, document_ids)
+        return self._chunks.get_or_set(user_id, lambda: self.store.list_chunks(user_id, None))
 
     def add_document(self, user_id: str, title: str, content: str) -> Document:
         chunks = chunk_text(content)
         d = self.store.create_document(user_id, title.strip(), chunks)
+        self._chunks.invalidate(lambda k: k == user_id)
         return Document(id=d.id, user_id=d.user_id, title=d.title, chunk_count=d.chunk_count,
                         created_at=d.created_at)
 
@@ -72,10 +81,11 @@ class RetrievalService:
     def delete_document(self, user_id: str, document_id: str) -> None:
         if not self.store.delete_document(user_id, document_id):
             raise NotFoundError("Document not found")
+        self._chunks.invalidate(lambda k: k == user_id)
 
     def search(self, user_id: str, query: str, k: int = 4,
                document_ids: list[str] | None = None, min_score: float = 0.5) -> list[Source]:
-        chunks = self.store.list_chunks(user_id, document_ids)
+        chunks = self._user_chunks(user_id, document_ids)
         q_terms = tokenize(query)
         if not chunks or not q_terms:
             return []

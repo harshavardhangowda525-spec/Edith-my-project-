@@ -107,6 +107,12 @@ class MainActivity : AppCompatActivity() {
             setOnCheckedChangeListener { _, id -> prefs.voiceName = voices[id] ?: "hannah" }
         }
         findViewById<Button>(R.id.testVoice).setOnClickListener { testVoice() }
+        findViewById<RadioGroup>(R.id.endPause).apply {
+            check(when { prefs.endPause < 1.1f -> R.id.pauseQuick; prefs.endPause > 1.5f -> R.id.pauseRelaxed; else -> R.id.pauseNormal })
+            setOnCheckedChangeListener { _, id ->
+                prefs.endPause = when (id) { R.id.pauseQuick -> 0.9f; R.id.pauseRelaxed -> 1.8f; else -> 1.3f }
+            }
+        }
         findViewById<Button>(R.id.phoneVoice).setOnClickListener { choosePhoneVoice() }
         val speedLabel = findViewById<TextView>(R.id.speedLabel)
         findViewById<android.widget.SeekBar>(R.id.speed).apply {
@@ -232,6 +238,14 @@ class MainActivity : AppCompatActivity() {
             Manifest.permission.READ_PHONE_STATE)
             .all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
         val apps = Settings.canDrawOverlays(this)
+        val speeds = EdithState.speedMs.toList()
+        findViewById<TextView>(R.id.speedStats).text = if (speeds.isEmpty())
+            "Speed: ask EDITH something to measure it. (Time from when you stop talking until EDITH's voice starts, including the pause above.)"
+        else {
+            val sorted = speeds.sorted()
+            "Speed: median %.1f s · fastest %.1f s · last %.1f s (%d answers, from end of your speech to EDITH's voice)".format(
+                sorted[sorted.size / 2] / 1000.0, sorted.first() / 1000.0, speeds.last() / 1000.0, speeds.size)
+        }
         val aliases = prefs.contactAliases
         findViewById<TextView>(R.id.aliases).text = if (aliases.isEmpty())
             "Remembered contacts: none yet. When several contacts match, EDITH asks which one and remembers your answer."

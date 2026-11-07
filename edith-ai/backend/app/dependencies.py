@@ -36,6 +36,14 @@ def get_retrieval(request: Request) -> RetrievalService:
     return request.app.state.retrieval
 
 
+def get_tasks(request: Request):
+    return request.app.state.tasks
+
+
+def get_bridge(request: Request):
+    return request.app.state.bridge
+
+
 def current_user(
     request: Request,
     authorization: str | None = Header(default=None),

@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from app.api import chat, documents, email, health, leads, meeting, memory, voice
+from app.api import bridge, chat, documents, email, health, leads, meeting, memory, tasks, voice
 from app.config import Settings, get_settings
 from app.errors import AppError
 from app.security.authentication import personal_mode_problem
@@ -26,7 +26,11 @@ from app.security.rate_limit import RateLimiter
 from app.services.ai_service import AIService
 from app.services.http import close_shared
 from app.services.metrics import Metrics
+from app.services.bridge import BridgeHub
 from app.services.email_service import EmailService
+from app.services.github_service import GitHubService
+from app.services.task_handlers import register_handlers
+from app.services.tasks import TaskEngine
 from app.services.leads_service import LeadsService
 from app.services.memory_service import MemoryService
 from app.services.retrieval_service import RetrievalService
@@ -54,6 +58,19 @@ class RedactSecretsFilter(logging.Filter):
         return True
 
 
+class JsonFormatter(logging.Formatter):
+    """LOG_FORMAT=json: one JSON object per line (ts, level, logger, msg) for log search tools."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        import json
+
+        out = {"ts": self.formatTime(record), "level": record.levelname, "logger": record.name,
+               "msg": record.getMessage()}
+        if record.exc_info:
+            out["exc"] = self.formatException(record.exc_info)
+        return json.dumps(out, ensure_ascii=False)
+
+
 class BodySizeLimitMiddleware:
     """Reject bodies larger than the limit, including chunked uploads without Content-Length."""
 
@@ -64,7 +81,7 @@ class BodySizeLimitMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        limit = self.audio_max + 64 * 1024 if scope["path"].endswith("/transcribe") else self.max_bytes
+        limit = self.audio_max + 64 * 1024 if scope["path"].endswith(("/transcribe", "/voice/ask")) else self.max_bytes
         headers = dict(scope.get("headers") or [])
         cl = headers.get(b"content-length")
         if cl is not None:
@@ -122,13 +139,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if settings.log_format == "json":
+        for h in logging.getLogger().handlers:
+            h.setFormatter(JsonFormatter())
     for h in logging.getLogger().handlers:
         h.addFilter(RedactSecretsFilter())
 
     is_prod = settings.environment == "production"
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        _app.state.tasks.start()  # also re-queues tasks left unfinished by a restart (Supabase storage)
         yield
+        await _app.state.tasks.shutdown()
         await close_shared()  # close pooled provider connections on shutdown
 
     app = FastAPI(title="EDITH AI", version="1.1.0", lifespan=lifespan,
@@ -146,6 +168,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.rate_limiter = RateLimiter(settings.rate_limit_per_minute)
     app.state.leads = LeadsService(settings)
     app.state.email = EmailService(settings)
+    app.state.github = GitHubService(settings)
+    app.state.bridge = BridgeHub()
+    app.state.tasks = TaskEngine(store, workers=settings.task_workers)
+    register_handlers(app.state.tasks, ai=app.state.ai, memory=app.state.memory, store=store,
+                      github=app.state.github, bridge=app.state.bridge,
+                      bridge_timeout_s=settings.bridge_job_timeout_s)
 
     if settings.ai_provider_problem:
         log.error("AI provider misconfigured: %s", settings.ai_provider_problem)
@@ -210,7 +238,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return _error(500, "internal_error", "Something went wrong on the server")
 
     for r in (health.router, chat.router, voice.router, memory.router, documents.router, meeting.router,
-              leads.router, email.router):
+              leads.router, email.router, tasks.router, bridge.router):
         app.include_router(r)
 
     # Serve the built React app from the same origin (single-container deployment).

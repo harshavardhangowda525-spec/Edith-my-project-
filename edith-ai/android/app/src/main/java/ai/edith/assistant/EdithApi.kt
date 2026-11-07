@@ -241,6 +241,17 @@ class EdithApi(private val baseUrl: String, private val password: String) {
 
     data class MeetingHelp(val question: String?, val answer: String?)
 
+    /** A background task on the server (research, GitHub summary, a job on your PC). */
+    data class TaskInfo(val id: String, val title: String, val status: String, val result: String?, val error: String?) {
+        val finished get() = status == "completed" || status == "failed" || status == "cancelled"
+    }
+
+    fun task(id: String): TaskInfo {
+        val t = JSONObject(request("GET", "/api/tasks/$id"))
+        fun str(key: String) = if (t.isNull(key)) null else t.optString(key).ifBlank { null }
+        return TaskInfo(t.optString("id"), t.optString("title"), t.optString("status"), str("result"), str("error"))
+    }
+
     /** Live meeting help. Returns answer = null when there is nothing worth answering. */
     fun meetingAssist(transcript: List<String>, force: Boolean, language: String?): MeetingHelp {
         val payload = JSONObject()

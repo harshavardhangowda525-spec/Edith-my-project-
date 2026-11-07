@@ -28,6 +28,8 @@ def make_settings(**overrides) -> Settings:
         storage_backend="memory",
         local_access_tokens=f"{ALICE}:{ALICE_ID},{BOB}:{BOB_ID}",
         rate_limit_per_minute=1000,
+        github_token=None,  # the developer's shell may export one; tests must not use it
+        github_default_repo=None,
     )
     base.update(overrides)
     return Settings(**base)

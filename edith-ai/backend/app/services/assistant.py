@@ -19,12 +19,13 @@ from typing import AsyncIterator
 from starlette.concurrency import run_in_threadpool
 
 from app.models.schemas import ChatRequest
-from app.services import command_service
+from app.services import command_service, server_commands
 from app.services.ai_service import AIService
 from app.services.cache import TTLCache
 from app.services.memory_service import MemoryService
 from app.services.quick import device_answer, quick_answer
 from app.services.retrieval_service import RetrievalService
+from app.services.tasks import TaskEngine
 
 # Questions whose answers change: never served from cache.
 _TIME_SENSITIVE = re.compile(r"\b(now|today|tonight|tomorrow|yesterday|time|date|weather|news|latest|current|"
@@ -39,7 +40,7 @@ def _cache_key(message: str, route: str, address: str | None, language: str | No
 
 
 async def assistant_events(body: ChatRequest, user_id: str, ai: AIService, memory: MemoryService,
-                           retrieval: RetrievalService) -> AsyncIterator[dict]:
+                           retrieval: RetrievalService, tasks: TaskEngine | None = None) -> AsyncIterator[dict]:
     t0 = time.perf_counter()
     timings: dict[str, float] = {}
 
@@ -67,6 +68,17 @@ async def assistant_events(body: ChatRequest, user_id: str, ai: AIService, memor
         directed = command_service.addressed_to_edith(message)
         if directed:
             message = command_service.strip_wake_word(message)
+
+    if directed:
+        server_cmd = server_commands.parse(message)
+        if server_cmd:
+            say, task = await server_commands.run(server_cmd, user_id, memory, tasks, body.address)
+            yield {"type": "meta", "route": "local", "model": "local"}
+            if task:
+                yield {"type": "task", "task": task}
+            yield {"type": "token", "t": say}
+            yield done(route="local")
+            return
 
     action = await command_service.understand(message, ai, allow_ai=directed)
     if action:

@@ -6,7 +6,8 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.config import Settings
 from app.api.sse import sse
-from app.dependencies import get_ai, get_memory, get_retrieval, get_settings_dep, get_speech, rate_limited_user
+from app.dependencies import (get_ai, get_memory, get_retrieval, get_settings_dep, get_speech, get_tasks,
+                              rate_limited_user)
 from app.errors import ValidationFailed
 from app.models.schemas import ChatRequest, ChatTurn, SpeakRequest, TranscriptionResponse
 from app.services.ai_service import AIService
@@ -15,6 +16,7 @@ from app.services.memory_service import MemoryService
 from app.services.retrieval_service import RetrievalService
 from app.security.authentication import AuthenticatedUser
 from app.services.speech_service import SpeechService
+from app.services.tasks import TaskEngine
 
 router = APIRouter(prefix="/api/voice", tags=["voice"])
 
@@ -65,6 +67,7 @@ async def ask(
     ai: AIService = Depends(get_ai),
     memory: MemoryService = Depends(get_memory),
     retrieval: RetrievalService = Depends(get_retrieval),
+    tasks: TaskEngine = Depends(get_tasks),
 ) -> StreamingResponse:
     """One round trip for a spoken question: audio in, streamed events out.
 
@@ -88,7 +91,7 @@ async def ask(
     body = ChatRequest(message=text, history=turns, followup=followup, address=address, language=language,
                        route=route if route in ("auto", "fast", "balanced", "deep") else None,
                        client_time=client_time, battery=battery)
-    return sse(assistant_events(body, user.id, ai, memory, retrieval), first=first)
+    return sse(assistant_events(body, user.id, ai, memory, retrieval, tasks), first=first)
 
 
 async def _empty():

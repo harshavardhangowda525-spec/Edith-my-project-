@@ -73,8 +73,15 @@ class Store(Protocol):
     def save_lead(self, user_id: str, lead: dict[str, Any]) -> dict[str, Any]: ...
     def list_leads(self, user_id: str) -> list[dict[str, Any]]: ...
     def delete_lead(self, user_id: str, lead_id: str) -> bool: ...
+    # background tasks
+    def save_task(self, user_id: str, task: dict[str, Any]) -> None: ...
+    def get_task(self, user_id: str, task_id: str) -> dict[str, Any] | None: ...
+    def list_tasks(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]: ...
+    def unfinished_tasks(self) -> list[dict[str, Any]]: ...
 
 
+TASK_FIELDS = ("id", "user_id", "type", "title", "params", "priority", "status", "progress", "message", "result",
+               "error", "attempts", "max_attempts", "timeout_s", "created_at", "updated_at", "finished_at")
 LEAD_FIELDS = ("place_id", "name", "phone", "phone_international", "address", "rating", "reviews",
                "maps_url", "social_url", "query", "status", "notes")
 
@@ -93,6 +100,7 @@ class InMemoryStore:
         self._documents: dict[str, DocumentRecord] = {}
         self._chunks: list[ChunkRecord] = []
         self._leads: dict[str, dict[str, Any]] = {}
+        self._tasks: dict[str, dict[str, Any]] = {}
 
     # --- memories ---
     def list_memories(self, user_id: str) -> list[MemoryRecord]:
@@ -183,6 +191,21 @@ class InMemoryStore:
             del self._leads[lead_id]
             return True
 
+    def save_task(self, user_id: str, task: dict[str, Any]) -> None:
+        with self._lock:
+            self._tasks[task["id"]] = {k: task.get(k) for k in TASK_FIELDS}
+
+    def get_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
+        t = self._tasks.get(task_id)
+        return dict(t) if t and t["user_id"] == user_id else None
+
+    def list_tasks(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = [dict(t) for t in self._tasks.values() if t["user_id"] == user_id]
+        return sorted(rows, key=lambda r: r["created_at"], reverse=True)[:limit]
+
+    def unfinished_tasks(self) -> list[dict[str, Any]]:
+        return []  # in-memory tasks don't survive a restart anyway
+
     def list_chunks(self, user_id: str, document_ids: list[str] | None = None) -> list[ChunkRecord]:
         wanted = set(document_ids or [])
         return [
@@ -238,6 +261,8 @@ def _database_error(r: httpx.Response) -> ProviderError:
 
 class SupabaseStore:
     """Supabase PostgREST adapter (server-side, service-role key)."""
+
+    remote = True  # network-backed: the task engine writes to it off the event loop
 
     def __init__(self, url: str | None, service_key: str | None, timeout: float = 10.0) -> None:
         if not url or not service_key:
@@ -355,3 +380,19 @@ class SupabaseStore:
         rows = self._req("DELETE", "/leads", headers={"Prefer": "return=representation"},
                          params={"id": f"eq.{lead_id}", "user_id": f"eq.{user_id}"})
         return bool(rows)
+
+    # --- background tasks (Supabase) ---
+    def save_task(self, user_id: str, task: dict[str, Any]) -> None:
+        self._req("POST", "/tasks", headers={"Prefer": "resolution=merge-duplicates,return=minimal"},
+                  params={"on_conflict": "id"}, json={k: task.get(k) for k in TASK_FIELDS})
+
+    def get_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
+        rows = self._req("GET", "/tasks", params={"id": f"eq.{task_id}", "user_id": f"eq.{user_id}"})
+        return rows[0] if rows else None
+
+    def list_tasks(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        return self._req("GET", "/tasks", params={"user_id": f"eq.{user_id}", "order": "created_at.desc",
+                                                  "limit": str(limit)})
+
+    def unfinished_tasks(self) -> list[dict[str, Any]]:
+        return self._req("GET", "/tasks", params={"status": "in.(queued,running,paused)", "limit": "200"})

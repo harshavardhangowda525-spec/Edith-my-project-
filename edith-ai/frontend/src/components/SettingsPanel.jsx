@@ -189,16 +189,24 @@ function useList(loader, notify) {
   return [items, reload];
 }
 
+const MEMORY_CATEGORIES = {
+  general: 'General', profile: 'About me', project: 'Project', decision: 'Decision', error_fix: 'Error fix',
+  preference: 'Preference', task: 'Task', command: 'Command',
+};
+
 function MemoryTab({ api, notify }) {
   const [items, reload] = useList(api.listMemories, notify);
   const [draft, setDraft] = useState('');
+  const [draftCat, setDraftCat] = useState('general');
+  const [filter, setFilter] = useState('all');
   const [editing, setEditing] = useState(null);
+  const shown = items && filter !== 'all' ? items.filter((m) => m.category === filter) : items;
 
   async function add(e) {
     e.preventDefault();
     if (!draft.trim()) return;
     try {
-      await api.addMemory(draft.trim());
+      await api.addMemory(draft.trim(), draftCat);
       setDraft('');
       reload();
     } catch (err) {
@@ -207,7 +215,7 @@ function MemoryTab({ api, notify }) {
   }
   async function save(id, content) {
     try {
-      await api.updateMemory(id, content);
+      await api.updateMemory(id, content, editing?.category);
       setEditing(null);
       reload();
     } catch (err) {
@@ -225,29 +233,48 @@ function MemoryTab({ api, notify }) {
 
   return (
     <>
-      <p className="note">EDITH only remembers what you explicitly save here or with “Remember”.</p>
+      <p className="note">
+        EDITH only remembers what you explicitly save here, with “Remember”, or by saying “remember that …”
+        (e.g. “remember for project shop: we decided to use Stripe”). Correct or delete anything here.
+      </p>
       <form className="row" onSubmit={add}>
         <input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="e.g. I prefer metric units"
           maxLength={1000} aria-label="New memory" />
+        <select value={draftCat} onChange={(e) => setDraftCat(e.target.value)} aria-label="Category">
+          {Object.entries(MEMORY_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
         <button className="btn btn--primary" type="submit">Add</button>
       </form>
-      {items === null ? <p className="note">Loading…</p> : items.length === 0 ? (
-        <p className="note">No memories saved.</p>
+      <label className="field">
+        <span className="field__label">Show</span>
+        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <option value="all">All categories</option>
+          {Object.entries(MEMORY_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+      </label>
+      {shown === null ? <p className="note">Loading…</p> : shown.length === 0 ? (
+        <p className="note">No memories saved{filter !== 'all' ? ' in this category' : ''}.</p>
       ) : (
         <ul className="list">
-          {items.map((m) => (
+          {shown.map((m) => (
             <li key={m.id}>
               {editing?.id === m.id ? (
                 <form className="row" onSubmit={(e) => { e.preventDefault(); save(m.id, editing.content); }}>
                   <input value={editing.content} autoFocus aria-label="Edit memory"
                     onChange={(e) => setEditing({ ...editing, content: e.target.value })} />
+                  <select value={editing.category} aria-label="Category"
+                    onChange={(e) => setEditing({ ...editing, category: e.target.value })}>
+                    {Object.entries(MEMORY_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </select>
                   <button className="btn btn--primary" type="submit">Save</button>
                   <button className="btn" type="button" onClick={() => setEditing(null)}>Cancel</button>
                 </form>
               ) : (
                 <>
-                  <span className="list__text">{m.content}</span>
-                  <button className="link-btn" onClick={() => setEditing({ id: m.id, content: m.content })}>Edit</button>
+                  <span className="list__text">
+                    <span className="tag">{MEMORY_CATEGORIES[m.category] || m.category}</span> {m.content}
+                  </span>
+                  <button className="link-btn" onClick={() => setEditing({ id: m.id, content: m.content, category: m.category })}>Edit</button>
                   <button className="link-btn link-btn--danger" onClick={() => remove(m.id)}>Delete</button>
                 </>
               )}

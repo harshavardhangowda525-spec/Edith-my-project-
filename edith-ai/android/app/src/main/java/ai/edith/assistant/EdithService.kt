@@ -187,6 +187,7 @@ class EdithService : Service() {
     override fun onDestroy() {
         running.set(false)
         keepWarm?.shutdownNow()
+        taskWatch?.shutdownNow()
         meetingWorker.shutdownNow()
         synchronized(transcript) { transcript.clear() }
         EdithState.meetingMode = false
@@ -704,6 +705,51 @@ class EdithService : Service() {
         }
     }
 
+    private var taskWatch: java.util.concurrent.ScheduledExecutorService? = null
+
+    /**
+     * Follows a background task EDITH started and tells you when it's really finished (never before):
+     * a notification with the result, and a short spoken summary when you're not in a call or meeting.
+     */
+    private fun watchTask(id: String, title: String) {
+        if (id.isBlank()) return
+        val exec = taskWatch ?: java.util.concurrent.Executors.newSingleThreadScheduledExecutor().also { taskWatch = it }
+        val started = System.currentTimeMillis()
+        lateinit var poll: Runnable
+        poll = Runnable {
+            if (!running.get()) return@Runnable
+            val prefs = Prefs(this)
+            val t = try { EdithApi(prefs.serverUrl, prefs.password).task(id) } catch (e: EdithException) { null }
+            val tooLong = System.currentTimeMillis() - started > 30 * 60_000L
+            if (t == null || !t.finished) {
+                if (!tooLong) exec.schedule(poll, if (t == null) 15 else 5, TimeUnit.SECONDS)
+                return@Runnable
+            }
+            val lead = prefs.address.trim().replaceFirstChar { it.uppercase() }.ifBlank { "Okay" }
+            val (headline, body) = when (t.status) {
+                "completed" -> "Done: ${t.title.ifBlank { title }}" to (t.result ?: "")
+                "failed" -> "Failed: ${t.title.ifBlank { title }}" to (t.error ?: "It didn't work.")
+                else -> return@Runnable // cancelled: you asked for that, nothing to announce
+            }
+            getSystemService(NotificationManager::class.java).notify(id.hashCode(),
+                NotificationCompat.Builder(this, CHANNEL)
+                    .setSmallIcon(R.drawable.ic_stat_edith)
+                    .setContentTitle(headline)
+                    .setContentText(body.take(120))
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(body.take(3000)))
+                    .setAutoCancel(true)
+                    .build())
+            EdithState.log(headline)
+            if (!inPhoneCall() && !EdithState.meetingMode && !busySpeaking()) {
+                val gist = body.replace(Regex("[#*`_>|-]+"), " ").replace(Regex("\\s+"), " ").trim()
+                    .split(Regex("(?<=[.!?])\\s+")).take(2).joinToString(" ").take(300)
+                speak(if (t.status == "completed") "$lead, ${t.title.ifBlank { title }} is ready. $gist"
+                      else "$lead, that task failed. $gist")
+            }
+        }
+        exec.schedule(poll, 3, TimeUnit.SECONDS)
+    }
+
     private fun speakWhisper(text: String) {
         speaking = true
         try { speak(text) } finally { speaking = false }
@@ -821,6 +867,7 @@ class EdithService : Service() {
         var kind = "answer"
         var action: org.json.JSONObject? = null
         var say = ""
+        var startedTask: org.json.JSONObject? = null
         val text = StringBuilder()
         val speaker = StreamingSpeaker(prefs)
         var lastUi = 0L
@@ -849,6 +896,7 @@ class EdithService : Service() {
                 "action" -> { kind = "action"; action = ev.optJSONObject("action"); say = ev.optString("say") }
                 "ignore" -> kind = "ignore"
                 "end" -> { kind = "end"; say = ev.optString("say") }
+                "task" -> startedTask = ev.optJSONObject("task")
             }
             true
         }
@@ -894,6 +942,7 @@ class EdithService : Service() {
             speaker.finish(wait = false)
             reply
         }
+        startedTask?.let { watchTask(it.optString("id"), it.optString("title")) }
         synchronized(history) {
             history.addLast(EdithApi.Turn("user", transcript))
             history.addLast(EdithApi.Turn("assistant", spoken))

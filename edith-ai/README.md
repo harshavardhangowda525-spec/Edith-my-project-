@@ -25,6 +25,13 @@ Install and setup: **[docs/ANDROID_APP.md](docs/ANDROID_APP.md)**.
 Find businesses without a website (Google Places), send Gmail and WhatsApp messages by voice with
 read-back confirmation: **[docs/LEADS_AND_EMAIL.md](docs/LEADS_AND_EMAIL.md)**.
 
+## Speed, background tasks and your PC
+
+Streaming answers, fast/balanced/deep model routing, measured latency, background tasks
+("in the background, research …", "check my GitHub") and a PC bridge for your projects
+("run the tests on my PC", project indexing): **[docs/PERFORMANCE.md](docs/PERFORMANCE.md)** and
+**[docs/PC_BRIDGE.md](docs/PC_BRIDGE.md)**.
+
 ## Quick start (Windows)
 
 One command (checks prerequisites, creates venv and `.env` files, installs, runs tests):

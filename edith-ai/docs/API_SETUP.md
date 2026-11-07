@@ -145,6 +145,13 @@ Allowed in production. The app shows an unlock screen and stores the password on
 | `/api/meeting/briefing` | POST | ✓ (rate-limited) | Briefing from documents |
 | `/api/meeting/summarize` | POST | ✓ (rate-limited) | Summarise notes (consent required) |
 | `/api/meeting/assist` | POST | ✓ (rate-limited) | Live meeting help: answer the latest question in a transcript (consent required, nothing stored) |
+| `/api/assistant/stream` | POST | ✓ (rate-limited) | Same as `/api/assistant`, streamed as server-sent events: `meta`, `token`…, `sources`, `task`, `action`/`ignore`/`end`, `done` (timings) |
+| `/api/voice/ask` | POST (multipart `audio`) | ✓ (rate-limited) | One round trip for a spoken question: `transcript` event, then the same stream |
+| `/api/tasks` | GET / POST | ✓ | List / start background tasks (`research`, `summarize_document`, `github_summary`, `pc`) |
+| `/api/tasks/{id}` | GET | ✓ | Progress, result or error of one task |
+| `/api/tasks/{id}/cancel` · `pause` · `resume` · `retry` | POST | ✓ | Control a task |
+| `/api/bridge/status` · `heartbeat` · `jobs/next` · `jobs/{id}/result` | GET/POST | ✓ | Used by the PC bridge (`tools/edith_bridge.py`) |
+| `/api/metrics` | GET | ✓ | Live latency p50/p95/p99, cache hit rate, failure rate, tokens, routes, circuit breakers |
 
 Interactive docs: <http://localhost:8000/docs> (disabled in production).
 

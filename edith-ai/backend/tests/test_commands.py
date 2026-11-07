@@ -126,7 +126,7 @@ def test_assistant_endpoint_answers_questions():
     c, p = _client(["A database stores data."])
     r = c.post("/api/assistant", headers=auth(), json={"message": "What is a database?"})
     assert r.json() == {"kind": "answer", "action": None, "say": None, "reply": "A database stores data.",
-                        "model": r.json()["model"], "mock": False, "sources": []}
+                        "model": r.json()["model"], "mock": False, "sources": [], "task": None}
 
 
 def test_assistant_endpoint_ai_says_none_then_answers():

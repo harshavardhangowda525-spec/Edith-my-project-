@@ -225,3 +225,34 @@ export function toSpeakable(text) {
     .replace(/^\s*[-•]\s+/gm, '')
     .trim();
 }
+
+/** Queue one more piece of speech WITHOUT cancelling what is already playing (streamed answers). */
+export function speakQueued(text, { voiceName, rate = 1, lang, onStart, onEnd } = {}) {
+  if (!synthesisSupported || !text) {
+    onEnd?.();
+    return;
+  }
+  const voice = listVoices().find((v) => v.name === voiceName);
+  const pieces = splitForSpeech(text);
+  pieces.forEach((piece, i) => {
+    const u = new SpeechSynthesisUtterance(piece);
+    if (voice) u.voice = voice;
+    u.lang = voice?.lang || lang || 'en-US';
+    u.rate = rate;
+    if (i === 0) u.onstart = () => onStart?.();
+    if (i === pieces.length - 1) {
+      u.onend = () => onEnd?.();
+      u.onerror = () => onEnd?.();
+    }
+    window.speechSynthesis.speak(u);
+  });
+}
+
+/** Index just after the last sentence end in `text` that leaves at least `min` characters before it, or -1. */
+export function speakableEnd(text, min = 40) {
+  const re = /[.!?…](?=\s)|\n/g;
+  let end = -1;
+  let m;
+  while ((m = re.exec(text))) if (m.index + 1 >= min) end = m.index + 1;
+  return end;
+}

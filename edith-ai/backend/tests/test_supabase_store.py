@@ -89,3 +89,18 @@ def test_bad_key_and_unknown_owner_messages() -> None:
     with pytest.raises(Exception) as e2:
         s.create_memory("u1", "hi", "general")
     assert "OWNER_USER_ID" in str(e2.value)
+
+
+@respx.mock
+def test_tasks_are_upserted_and_scoped() -> None:
+    up = respx.post(f"{URL}/rest/v1/tasks").mock(return_value=httpx.Response(201))
+    get = respx.get(f"{URL}/rest/v1/tasks").mock(return_value=httpx.Response(200, json=[]))
+    store = SupabaseStore(URL, "service-key")
+    store.save_task("u1", {"id": "t1", "user_id": "u1", "type": "research", "title": "x", "params": {"q": 1},
+                           "status": "running", "secret_extra": "dropped"})
+    req = up.calls[0].request
+    assert req.url.params["on_conflict"] == "id" and "merge-duplicates" in req.headers["Prefer"]
+    body = __import__("json").loads(req.content)
+    assert body["status"] == "running" and "secret_extra" not in body
+    assert store.get_task("u2", "t1") is None
+    assert get.calls[0].request.url.params["user_id"] == "eq.u2"

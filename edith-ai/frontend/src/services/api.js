@@ -22,6 +22,8 @@ const defaults = {
   useMemory: true,
   useDocuments: true,
   serverSpeech: false,
+  route: 'auto', // auto | fast | balanced | deep
+  minimal: false,
   talkMode: isTouch ? 'tap' : 'hold', // tap: tap once, speak, it sends when you pause
   keepAwake: false,
 };
@@ -89,13 +91,62 @@ export function createApi(getSettings) {
     return res.json();
   }
 
+  /** POST /api/assistant/stream and call onEvent(ev) for every server-sent event as it arrives. */
+  async function stream(path, body, onEvent, signal) {
+    const { apiUrl, accessToken } = getSettings();
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+    let res;
+    try {
+      res = await fetch(apiUrl.replace(/\/$/, '') + path, { method: 'POST', headers, body: JSON.stringify(body), signal });
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      throw new ApiError(0, 'network', `Cannot reach the EDITH server${apiUrl ? ` at ${apiUrl}` : ''}. Check your internet connection.`);
+    }
+    if (!res.ok) {
+      let code = 'http_error';
+      let message = `Request failed (HTTP ${res.status})`;
+      try {
+        const data = await res.json();
+        if (data?.error) ({ code, message } = data.error);
+      } catch {
+        /* non-JSON error */
+      }
+      throw new ApiError(res.status, code, message);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const ev = JSON.parse(line.slice(5));
+        if (ev.type === 'error') throw new ApiError(502, ev.code || 'stream_error', ev.message || 'The answer stopped.');
+        onEvent(ev);
+      }
+    }
+  }
+
   return {
     health: () => request('/health', { timeoutMs: 5000 }),
+    assistantStream: (payload, onEvent, signal) => stream('/api/assistant/stream', payload, onEvent, signal),
+    metrics: () => request('/api/metrics', { timeoutMs: 8000 }),
+    listTasks: () => request('/api/tasks?limit=30'),
+    createTask: (type, params, title) => request('/api/tasks', { method: 'POST', body: { type, params, title } }),
+    taskAction: (id, action) => request(`/api/tasks/${id}/${action}`, { method: 'POST' }),
+    bridgeStatus: () => request('/api/bridge/status', { timeoutMs: 8000 }),
     chat: (payload) => request('/api/chat', { method: 'POST', body: payload }),
     listMemories: () => request('/api/memory'),
     addMemory: (content, category = 'general') =>
       request('/api/memory', { method: 'POST', body: { content, category } }),
-    updateMemory: (id, content) => request(`/api/memory/${id}`, { method: 'PATCH', body: { content } }),
+    updateMemory: (id, content, category) =>
+      request(`/api/memory/${id}`, { method: 'PATCH', body: category ? { content, category } : { content } }),
     deleteMemory: (id) => request(`/api/memory/${id}`, { method: 'DELETE' }),
     getMemorySettings: () => request('/api/memory/settings'),
     setMemoryEnabled: (enabled) =>

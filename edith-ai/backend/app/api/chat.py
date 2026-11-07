@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Response
 from fastapi.responses import StreamingResponse
 
-from app.dependencies import get_ai, get_memory, get_retrieval, rate_limited_user
+from app.dependencies import get_ai, get_memory, get_retrieval, get_tasks, rate_limited_user
 from app.models.schemas import AssistantResponse, ChatRequest, ChatResponse
 from app.security.authentication import AuthenticatedUser
 from app.api.sse import sse
@@ -9,6 +9,7 @@ from app.services.assistant import assistant_events
 from app.services.ai_service import AIService
 from app.services.memory_service import MemoryService
 from app.services.retrieval_service import RetrievalService
+from app.services.tasks import TaskEngine
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -39,6 +40,7 @@ async def assistant(
     ai: AIService = Depends(get_ai),
     memory: MemoryService = Depends(get_memory),
     retrieval: RetrievalService = Depends(get_retrieval),
+    tasks: TaskEngine = Depends(get_tasks),
 ) -> AssistantResponse:
     """Voice entry point for the phone app: a phone action (call, open app, music, ...) or an answer.
 
@@ -47,7 +49,7 @@ async def assistant(
     """
     parts: list[str] = []
     out: dict = {"kind": "answer", "sources": [], "mock": False}
-    async for ev in assistant_events(body, user.id, ai, memory, retrieval):
+    async for ev in assistant_events(body, user.id, ai, memory, retrieval, tasks):
         t = ev["type"]
         if t == "token":
             parts.append(ev["t"])
@@ -58,6 +60,8 @@ async def assistant(
             out.update(kind=t, say=ev.get("say"))
         elif t == "sources":
             out["sources"] = ev["sources"]
+        elif t == "task":
+            out["task"] = ev["task"]
         elif t == "meta":
             out["model"] = ev.get("model")
         elif t == "done":
@@ -76,6 +80,7 @@ async def assistant_stream(
     ai: AIService = Depends(get_ai),
     memory: MemoryService = Depends(get_memory),
     retrieval: RetrievalService = Depends(get_retrieval),
+    tasks: TaskEngine = Depends(get_tasks),
 ) -> StreamingResponse:
     """Server-sent events: meta (route/model, sent at once), token..., action | ignore | end, done (timings)."""
-    return sse(assistant_events(body, user.id, ai, memory, retrieval))
+    return sse(assistant_events(body, user.id, ai, memory, retrieval, tasks))

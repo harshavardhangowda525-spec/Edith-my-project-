@@ -108,6 +108,10 @@ Useful settings (⚙):
 
 ## Good to know
 
+* **Already set up Supabase before?** Run the new migrations once in Supabase → SQL Editor:
+  `database/migrations/0002_leads.sql` (lead finder) and `database/migrations/0003_tasks.sql`
+  (background task history). New installs get both from `schema.sql`.
+
 * **Free plan wake-up:** Render's free plan sleeps after about 15 minutes without use. The first
   request after that takes about 30–60 seconds; after that it's fast. To avoid this, change the service
   to a paid **Starter** instance in Render (Settings → Instance Type).

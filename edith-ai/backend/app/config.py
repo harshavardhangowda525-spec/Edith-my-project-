@@ -138,6 +138,17 @@ class Settings(BaseSettings):
     gmail_app_password: str | None = None
     email_sender_name: str | None = None
 
+    # --- GitHub intelligence (optional; a fine-grained read-only token is enough) ----
+    github_token: str | None = None
+    github_default_repo: str | None = None   # "owner/name" used when you just say "check GitHub"
+
+    # --- Background tasks & PC bridge ---------------------------------------------
+    task_workers: int = 3
+    bridge_job_timeout_s: float = 900.0
+
+    # --- Logging: "text" (default) or "json" (one JSON object per line) -----------
+    log_format: Literal["text", "json"] = "text"
+
     # --- Static frontend (single-container deployment) -------------------------
     # When set and the folder exists, the built React app is served from "/".
     static_dir: str | None = None
@@ -148,7 +159,8 @@ class Settings(BaseSettings):
         return (v or "mock").strip().lower().replace("-", "").replace(" ", "") or "mock"
 
     @field_validator("owner_access_token", "supabase_url", "supabase_service_role_key",
-                     "supabase_jwt_secret", "google_maps_api_key", "gmail_address", mode="before")
+                     "supabase_jwt_secret", "google_maps_api_key", "gmail_address", "github_token",
+                     "github_default_repo", mode="before")
     @classmethod
     def _strip_pasted(cls, v: object) -> object:
         """Values pasted into hosting dashboards often carry spaces, newlines or quotes."""

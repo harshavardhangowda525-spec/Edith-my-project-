@@ -1,14 +1,19 @@
-const LABELS = {
+export const LABELS = {
   idle: 'Idle',
   listening: 'Listening',
-  thinking: 'Thinking',
+  understanding: 'Understanding',
+  processing: 'Processing',
+  thinking: 'Processing',
   speaking: 'Speaking',
+  executing: 'Executing',
+  completed: 'Completed',
+  error: 'Error',
 };
 
 /** Animated holographic EDITH orb. Pure CSS/SVG animation; honours prefers-reduced-motion. */
-export default function VoiceOrb({ state = 'idle', level = 0 }) {
+export default function VoiceOrb({ state = 'idle', level = 0, detail }) {
   return (
-    <div className={`orb orb--${state}`} role="img" aria-label={`EDITH is ${LABELS[state]}`}>
+    <div className={`orb orb--${state}`} role="img" aria-label={`EDITH is ${LABELS[state] || state}`}>
       <div className="orb__halo" />
       <svg className="orb__rings" viewBox="0 0 200 200" aria-hidden="true">
         <defs>
@@ -33,7 +38,10 @@ export default function VoiceOrb({ state = 'idle', level = 0 }) {
       <div className="orb__wave" aria-hidden="true">
         {Array.from({ length: 5 }).map((_, i) => <span key={i} style={{ animationDelay: `${i * 0.11}s` }} />)}
       </div>
-      <div className="orb__label" aria-live="polite">{LABELS[state]}</div>
+      <div className="orb__label" aria-live="polite">
+        {LABELS[state] || state}
+        {detail && <span className="orb__detail">{detail}</span>}
+      </div>
     </div>
   );
 }

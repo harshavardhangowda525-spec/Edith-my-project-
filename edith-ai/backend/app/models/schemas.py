@@ -70,6 +70,8 @@ class AssistantResponse(BaseModel):
     model: str | None = None
     mock: bool = False
     sources: list[Source] = Field(default_factory=list)
+    # A background task EDITH started for this request (see /api/tasks).
+    task: dict[str, Any] | None = None
 
 
 class MemoryCreate(BaseModel):

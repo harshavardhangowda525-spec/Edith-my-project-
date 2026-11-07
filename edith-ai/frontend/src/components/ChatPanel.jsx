@@ -35,11 +35,22 @@ export default function ChatPanel({ messages, onSend, busy, interim, onRemember,
           </li>
         )}
         {messages.map((m) => (
-          <li key={m.id} className={`msg msg--${m.role}${m.error ? ' msg--error' : ''}`}>
-            <div className="msg__bubble">
-              {m.content}
-              {m.mock && <span className="tag tag--warn">mock</span>}
-            </div>
+          <li key={m.id} className={`msg msg--${m.role}${m.error ? ' msg--error' : ''}${m.streaming && m.content ? ' msg--streaming' : ''}`}>
+            {m.streaming && !m.content ? (
+              <div className="msg__bubble typing" aria-label="EDITH is thinking"><span /><span /><span /></div>
+            ) : (
+              <div className="msg__bubble">
+                {m.content}
+                {m.mock && <span className="tag tag--warn">mock</span>}
+              </div>
+            )}
+            {m.role === 'assistant' && !m.streaming && m.timings?.total_ms != null && (
+              <div className="msg__meta">
+                {m.route === 'local' ? 'instant' : m.model}{m.cached ? ' · cached' : ''}
+                {m.timings.first_token_ms != null && ` · first words ${Math.round(m.timings.first_token_ms)} ms`}
+                {` · ${Math.round(m.timings.total_ms)} ms`}
+              </div>
+            )}
             {m.sources?.length > 0 && (
               <details className="msg__sources">
                 <summary>{m.sources.length} source{m.sources.length > 1 ? 's' : ''}</summary>
